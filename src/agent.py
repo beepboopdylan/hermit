@@ -4,6 +4,7 @@ load_dotenv()
 import subprocess
 from openai import OpenAI
 from policy import check_command, RiskLevel
+from actions import parse_action, RunCommand
 import audit
 
 client = OpenAI()
@@ -11,33 +12,47 @@ MODEL = "gpt-4o-mini"
 
 SANDBOX_ROOT = "/home/ubuntu/sandbox-root"
 
-def get_command(user_input: str) -> str:
-    """
+SYSTEM_ROOT = """You are Hermit, a secure shell assistant. Convert user requests to structured actions.
 
-    Asking OpenAI to generate a shell command
+Respond with ONLY valid JSON. No explanation, no markdown.
 
-    """
+Available actions:
+
+{"action": "list_files", "path": ".", "all": false, "long": false}
+{"action": "read_file", "path": "filename"}
+{"action": "create_file", "path": "filename", "content": "text"}
+{"action": "delete_files", "path": ".", "pattern": "*.log", "recursive": false}
+{"action": "move_file", "source": "old", "destination": "new"}
+{"action": "create_directory", "path": "dirname"}
+{"action": "find_files", "path": ".", "pattern": "*.py", "file_type": "file"}
+{"action": "run_command", "command": "echo hello"}
+
+Use run_command only if no other action fits.
+
+Examples:
+User: "show all files" → {"action": "list_files", "path": ".", "all": true, "long": true}
+User: "delete log files" → {"action": "delete_files", "path": ".", "pattern": "*.log"}
+User: "what's in readme" → {"action": "read_file", "path": "readme.txt"}
+User: "make a folder called test" → {"action": "create_directory", "path": "test"}
+"""
+
+def get_action(user_input: str) -> str:
+    """Ask LLM to return a structured JSON action."""
     response = client.chat.completions.create(
         model=MODEL,
         messages=[{
-            "role":"system",
-            "content":"You're a Linux shell expert. Convert user requests into shell commands. Reply with ONLY the command, no explanation, no markdown, no code blocks."
+            "role": "system",
+            "content": SYSTEM_ROOT
         }, {
-            "role":"user",
-            "content":user_input
+            "role": "user",
+            "content": user_input
         }],
         max_tokens=256
     )
     return response.choices[0].message.content.strip()
 
 def execute_unsafe(command: str) -> str:
-    """Execute command and return output."""
-    result = subprocess.run(
-        command,
-        shell=True,
-        capture_output=True,
-        text=True
-    )
+    result = subprocess.run(command, shell=True, capture_output=True, text=True)
     return result.stdout + result.stderr
 
 def execute_sandboxed(command: str) -> str:
@@ -63,16 +78,16 @@ def main():
     sandboxed = "--sandbox" in sys.argv
 
     if sandboxed:
-        print(f"🔒 Sandboxed Agent (using {MODEL})")
-        print(f"   Filesystem restricted to: {SANDBOX_ROOT}")
-        print("   PID namespace isolation: active")
+        print(f"🔒 Hermit (sandboxed mode)")
+        print(f"   Security: namespaces + chroot + seccomp + policy engine")
+        print("   Output: structured actions")
     else:
-        print(f"🔓 Unsafe Agent (using {MODEL})")
-        print("   No sandbox yet - be careful!")
-    print("   Type 'exit' to quit\n")
+        print(f"🔓 Hermit (unsafe mode)")
+        print("   No sandbox - be careful!")
+    print("   Type 'exit' to quit, 'audit' for history\n")
 
     while True:
-        user_input = input("> ")
+        user_input = input("🦀 > ")
 
         if user_input.lower() in ['exit', 'quit']:
             break
@@ -82,8 +97,12 @@ def main():
         if user_input.lower() == 'audit':
             audit.show_recent(10)
             continue
-        
-        command = get_command(user_input)
+
+        action = parse_action(get_action(user_input))
+
+        command = action.render()
+
+        print(f"Action: {action.describe()}")
         print(f"Command: {command}")
 
         audit.log_command(user_input, command)
