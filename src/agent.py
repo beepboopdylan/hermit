@@ -3,15 +3,19 @@ load_dotenv()
 
 import subprocess
 from openai import OpenAI
+from policy import check_command, RiskLevel
+import audit
 
 client = OpenAI()
 MODEL = "gpt-4o-mini"
 
+SANDBOX_ROOT = "/home/ubuntu/sandbox-root"
+
 def get_command(user_input: str) -> str:
     """
-    
+
     Asking OpenAI to generate a shell command
-    
+
     """
     response = client.chat.completions.create(
         model=MODEL,
@@ -43,9 +47,10 @@ def execute_sandboxed(command: str) -> str:
         "--pid",
         "--fork",
         "--mount-proc",
-        "sh", "-c", command
+        "chroot", SANDBOX_ROOT,
+        "/usr/bin/python3", "/sandbox/sandbox_wrapper.py", command
     ]
-    
+
     result = subprocess.run(
         full_command,
         capture_output=True,
@@ -59,7 +64,8 @@ def main():
 
     if sandboxed:
         print(f"🔒 Sandboxed Agent (using {MODEL})")
-        print("   Running in PID namespace isolation")
+        print(f"   Filesystem restricted to: {SANDBOX_ROOT}")
+        print("   PID namespace isolation: active")
     else:
         print(f"🔓 Unsafe Agent (using {MODEL})")
         print("   No sandbox yet - be careful!")
@@ -67,24 +73,51 @@ def main():
 
     while True:
         user_input = input("> ")
-        
+
         if user_input.lower() in ['exit', 'quit']:
             break
-
+        if not user_input:
+            continue
+        
+        if user_input.lower() == 'audit':
+            audit.show_recent(10)
+            continue
+        
         command = get_command(user_input)
-        print(f"Command: {command}") 
+        print(f"Command: {command}")
 
-        confirm = input("Execute? [y/N] ")
-        if confirm.lower() == 'y':
-            if sandboxed:
-                output = execute_sandboxed(command)
-            else:
-                output = execute_unsafe(command)
-            print(output)
+        audit.log_command(user_input, command)
+
+        policy = check_command(command)
+        audit.log_policy_check(command, policy.allowed, policy.risk.value, policy.reason)
+
+        if not policy.allowed:
+            print(f"BLOCKED [{policy.risk.value}]: {policy.reason}")
+            audit.log_blocked(command, policy.reason)
+            continue
+
+        if policy.risk == RiskLevel.HIGH:
+            print(f"HIGH RISK: {policy.reason}")
+            confirm = input("Type 'yes' to confirm: ")
+            if confirm.lower() != 'yes':
+                print("Cancelled.")
+                continue
+        elif policy.risk == RiskLevel.MEDIUM:
+            print(f"⚡ {policy.reason}")
+            confirm = input("Execute? [y/N] ")
+            if confirm.lower() != 'y':
+                continue
+        else:
+            confirm = input("Execute? [y/N] ")
+            if confirm.lower() != 'y':
+                print("Cancelled.")
+                continue
+
+        if sandboxed:
+            output = execute_sandboxed(command)
+        else:
+            output = execute_unsafe(command)
+        print(output if output else "(no output)")
 
 if __name__ == "__main__":
     main()
-
-
-    
-
