@@ -2,9 +2,13 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import subprocess
+import sys
+import json
+import signal
 from openai import OpenAI
 from policy import check_command, RiskLevel
 from actions import parse_action, RunCommand
+from mounts import setup_mounts, cleanup_mounts, list_mounts
 import audit
 
 client = OpenAI()
@@ -16,25 +20,32 @@ SYSTEM_ROOT = """You are Hermit, a secure shell assistant. Convert user requests
 
 Respond with ONLY valid JSON. No explanation, no markdown.
 
+The user's files are mounted at:
+- /workspace/downloads (their Downloads folder)
+- /workspace/projects (their projects folder)
+
 Available actions:
 
-{"action": "list_files", "path": ".", "all": false, "long": false}
+{"action": "list_files", "path": "/workspace/downloads", "all": false, "long": false}
 {"action": "read_file", "path": "filename"}
 {"action": "create_file", "path": "filename", "content": "text"}
 {"action": "delete_files", "path": ".", "pattern": "*.log", "recursive": false}
 {"action": "move_file", "source": "old", "destination": "new"}
 {"action": "create_directory", "path": "dirname"}
 {"action": "find_files", "path": ".", "pattern": "*.py", "file_type": "file"}
+{"action": "organize_by_type", "path": "/workspace/downloads"}
 {"action": "run_command", "command": "echo hello"}
 
 Use run_command only if no other action fits.
 
 Examples:
-User: "show all files" → {"action": "list_files", "path": ".", "all": true, "long": true}
-User: "delete log files" → {"action": "delete_files", "path": ".", "pattern": "*.log"}
-User: "what's in readme" → {"action": "read_file", "path": "readme.txt"}
-User: "make a folder called test" → {"action": "create_directory", "path": "test"}
+User: "show my downloads" → {"action": "list_files", "path": "/workspace/downloads", "all": true, "long": true}
+User: "organize downloads by type" → {"action": "organize_by_type", "path": "/workspace/downloads"}
+User: "what projects do I have" → {"action": "list_files", "path": "/workspace/projects", "long": true}
 """
+
+# Global for cleanup on exit
+mounted_paths = []
 
 def get_action(user_input: str) -> str:
     """Ask LLM to return a structured JSON action."""
@@ -73,70 +84,87 @@ def execute_sandboxed(command: str) -> str:
     )
     return result.stdout + result.stderr
 
+def cleanup_handler(signum, frame):
+    """Handle Ctrl+C gracefully."""
+    print("\n\nCleaning up...")
+    cleanup_mounts(mounted_paths)
+    print("Goodbye!")
+    sys.exit(0)
+
+
 def main():
-    import sys
+    global mounted_paths
     sandboxed = "--sandbox" in sys.argv
 
     if sandboxed:
         print(f"🔒 Hermit (sandboxed mode)")
-        print(f"   Security: namespaces + chroot + seccomp + policy engine")
-        print("   Output: structured actions")
+        print("   Security: namespaces + chroot + seccomp + policy engine\n")
+        
+        list_mounts()
+        mounted_paths = setup_mounts()
+        
+        signal.signal(signal.SIGINT, cleanup_handler)
+        
+        print("\n   Type 'exit' to quit, 'audit' for history\n")
     else:
         print(f"🔓 Hermit (unsafe mode)")
         print("   No sandbox - be careful!")
-    print("   Type 'exit' to quit, 'audit' for history\n")
+        print("   Type 'exit' to quit, 'audit' for history\n")
+    try:
+        while True:
+            user_input = input("🦀 > ")
 
-    while True:
-        user_input = input("🦀 > ")
-
-        if user_input.lower() in ['exit', 'quit']:
-            break
-        if not user_input:
-            continue
-        
-        if user_input.lower() == 'audit':
-            audit.show_recent(10)
-            continue
-
-        action = parse_action(get_action(user_input))
-
-        command = action.render()
-
-        print(f"Action: {action.describe()}")
-        print(f"Command: {command}")
-
-        audit.log_command(user_input, command)
-
-        policy = check_command(command)
-        audit.log_policy_check(command, policy.allowed, policy.risk.value, policy.reason)
-
-        if not policy.allowed:
-            print(f"BLOCKED [{policy.risk.value}]: {policy.reason}")
-            audit.log_blocked(command, policy.reason)
-            continue
-
-        if policy.risk == RiskLevel.HIGH:
-            print(f"HIGH RISK: {policy.reason}")
-            confirm = input("Type 'yes' to confirm: ")
-            if confirm.lower() != 'yes':
-                print("Cancelled.")
+            if user_input.lower() in ['exit', 'quit']:
+                break
+            if not user_input:
                 continue
-        elif policy.risk == RiskLevel.MEDIUM:
-            print(f"⚡ {policy.reason}")
-            confirm = input("Execute? [y/N] ")
-            if confirm.lower() != 'y':
-                continue
-        else:
-            confirm = input("Execute? [y/N] ")
-            if confirm.lower() != 'y':
-                print("Cancelled.")
+            
+            if user_input.lower() == 'audit':
+                audit.show_recent(10)
                 continue
 
-        if sandboxed:
-            output = execute_sandboxed(command)
-        else:
-            output = execute_unsafe(command)
-        print(output if output else "(no output)")
+            action = parse_action(get_action(user_input))
+
+            command = action.render()
+
+            print(f"Action: {action.describe()}")
+            print(f"Command: {command}")
+
+            audit.log_command(user_input, command)
+
+            policy = check_command(command)
+            audit.log_policy_check(command, policy.allowed, policy.risk.value, policy.reason)
+
+            if not policy.allowed:
+                print(f"BLOCKED [{policy.risk.value}]: {policy.reason}")
+                audit.log_blocked(command, policy.reason)
+                continue
+            if policy.risk == RiskLevel.HIGH:
+                print(f"HIGH RISK: {policy.reason}")
+                confirm = input("Type 'yes' to confirm: ")
+                if confirm.lower() != 'yes':
+                    print("Cancelled.")
+                    continue
+            elif policy.risk == RiskLevel.MEDIUM:
+                print(f"⚡ {policy.reason}")
+                confirm = input("Execute? [y/N] ")
+                if confirm.lower() != 'y':
+                    continue
+            else:
+                confirm = input("Execute? [y/N] ")
+                if confirm.lower() != 'y':
+                    print("Cancelled.")
+                    continue
+
+            if sandboxed:
+                output = execute_sandboxed(command)
+            else:
+                output = execute_unsafe(command)
+            print(output if output else "(no output)")
+    finally:
+        if sandboxed and mounted_paths:
+            print("\n🦀 Cleaning up...")
+            cleanup_mounts(mounted_paths)
 
 if __name__ == "__main__":
     main()

@@ -99,6 +99,25 @@ class MoveFile(Action):
         return f"Move {self.source} to {self.destination}"
 
 @dataclass
+class OrganizeByType(Action):
+    action: str = "organize_by_type"
+    path: str = "."
+    
+    def render(self) -> str:
+        # Proper logic that doesn't move folders into each other
+        return f"""cd {self.path} && 
+mkdir -p images documents audio video archives other &&
+for f in *.jpg *.jpeg *.png *.gif *.webp; do [ -f "$f" ] && mv "$f" images/; done 2>/dev/null;
+for f in *.pdf *.doc *.docx *.txt *.md; do [ -f "$f" ] && mv "$f" documents/; done 2>/dev/null;
+for f in *.mp3 *.wav *.flac; do [ -f "$f" ] && mv "$f" audio/; done 2>/dev/null;
+for f in *.mp4 *.mov *.avi; do [ -f "$f" ] && mv "$f" video/; done 2>/dev/null;
+for f in *.zip *.tar *.gz; do [ -f "$f" ] && mv "$f" archives/; done 2>/dev/null;
+true"""
+    
+    def describe(self) -> str:
+        return f"Organize files in {self.path} by type"
+
+@dataclass
 class CreateDirectory(Action):
     action: str = "create_directory"
     path: str = ""
@@ -151,6 +170,7 @@ ACTION_MAP = {
     "create_directory": CreateDirectory,
     "find_files": FindFiles,
     "run_command": RunCommand,
+    "organize_by_type": OrganizeByType,
 }
 
 def parse_action(json_str: str) -> Action:
