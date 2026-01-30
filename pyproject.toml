@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hermit-shell"
+version = "0.1.0"
+description = "Sandboxed AI agent for desktop automation"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [
+    {name = "Dylan", email = "dylan.g.tran@gmail.com"}
+]
+keywords = ["ai", "shell", "sandbox", "automation", "security"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: System :: Shells",
+    "Topic :: Security",
+]
+dependencies = [
+    "openai>=1.0.0",
+    "python-dotenv>=1.0.0",
+    "pyseccomp>=0.1.0",
+]
+
+[project.scripts]
+hermit = "hermit.agent:main"
+
+[project.urls]
+Homepage = "https://github.com/beepboopdylan/hermit"
+Repository = "https://github.com/beepboopdylan/hermit"
+
+[tool.setuptools.packages.find]
+include = ["hermit*"]
+exclude = ["drafts*", "src*", "tests*"]

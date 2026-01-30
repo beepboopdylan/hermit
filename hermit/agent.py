@@ -3,20 +3,17 @@ load_dotenv()
 
 import subprocess
 import sys
-import json
 import signal
-from openai import OpenAI
-from policy import check_command, RiskLevel
-from actions import parse_action, RunCommand
-from mounts import setup_mounts, cleanup_mounts, list_mounts
-import audit
-
-client = OpenAI()
-MODEL = "gpt-4o-mini"
+from hermit.policy import check_command, RiskLevel
+from hermit.actions import parse_action
+from hermit.mounts import setup_mounts, cleanup_mounts, list_mounts
+from hermit.llm import get_completion
+from hermit.config import ensure_setup, config_cli, get_preference
+from hermit import audit
 
 SANDBOX_ROOT = "/home/ubuntu/sandbox-root"
 
-SYSTEM_ROOT = """You are Hermit, a secure shell assistant. Convert user requests to structured actions.
+SYSTEM_PROMPT = """You are Hermit, a secure shell assistant. Convert user requests to structured actions.
 
 Respond with ONLY valid JSON. No explanation, no markdown.
 
@@ -46,21 +43,11 @@ User: "what projects do I have" → {"action": "list_files", "path": "/workspace
 
 # Global for cleanup on exit
 mounted_paths = []
+cleanup_done = False
 
 def get_action(user_input: str) -> str:
     """Ask LLM to return a structured JSON action."""
-    response = client.chat.completions.create(
-        model=MODEL,
-        messages=[{
-            "role": "system",
-            "content": SYSTEM_ROOT
-        }, {
-            "role": "user",
-            "content": user_input
-        }],
-        max_tokens=256
-    )
-    return response.choices[0].message.content.strip()
+    return get_completion(SYSTEM_PROMPT, user_input)
 
 def execute_unsafe(command: str) -> str:
     result = subprocess.run(command, shell=True, capture_output=True, text=True)
@@ -86,33 +73,53 @@ def execute_sandboxed(command: str) -> str:
 
 def cleanup_handler(signum, frame):
     """Handle Ctrl+C gracefully."""
-    print("\n\nCleaning up...")
-    cleanup_mounts(mounted_paths)
+    global cleanup_done
+    if not cleanup_done:
+        print("\n\n[*] Cleaning up...")
+        cleanup_mounts(mounted_paths)
+        cleanup_done = True
     print("Goodbye!")
     sys.exit(0)
 
-
 def main():
-    global mounted_paths
+    global mounted_paths, cleanup_done
     sandboxed = "--sandbox" in sys.argv
 
+    config = ensure_setup()
+    backend = config["llm_backend"]
+
+    print(r"""
+       __
+      (  )_
+     (_____)_
+    (________)""")
+
     if sandboxed:
-        print(f"🔒 Hermit (sandboxed mode)")
-        print("   Security: namespaces + chroot + seccomp + policy engine\n")
-        
+        print("....//( 00 )\\.............................")
+        print("|                                        |")
+        print("|  HERMIT       [SANDBOXED MODE]         |")
+        print("..........................................")
+        print(f"  Backend: {backend}")
+        print("  Security: namespaces + chroot + seccomp + policy engine\n")
+
         list_mounts()
         mounted_paths = setup_mounts()
-        
+
         signal.signal(signal.SIGINT, cleanup_handler)
-        
-        print("\n   Type 'exit' to quit, 'audit' for history\n")
+
     else:
-        print(f"🔓 Hermit (unsafe mode)")
-        print("   No sandbox - be careful!")
-        print("   Type 'exit' to quit, 'audit' for history\n")
+        print("....//( 00 )\\.............................")
+        print("|                                        |")
+        print("|  HERMIT       [UNSAFE MODE].           |")
+        print("..........................................")
+        print(f"  Backend: {backend}")
+        print("  *** WARNING: No sandbox - be careful! ***")
+        
+    print("  Type 'exit' to quit, 'audit' for history, 'config' for settings\n")
+    
     try:
         while True:
-            user_input = input("🦀 > ")
+            user_input = input("hermit> ")
 
             if user_input.lower() in ['exit', 'quit']:
                 break
@@ -121,6 +128,11 @@ def main():
             
             if user_input.lower() == 'audit':
                 audit.show_recent(10)
+                continue
+
+            if user_input.lower().startswith('config'):
+                args = user_input.split()[1:] if len(user_input.split()) > 1 else []
+                config_cli(args)
                 continue
 
             action = parse_action(get_action(user_input))
@@ -146,25 +158,28 @@ def main():
                     print("Cancelled.")
                     continue
             elif policy.risk == RiskLevel.MEDIUM:
-                print(f"⚡ {policy.reason}")
+                print(f"[!] CAUTION: {policy.reason}")
                 confirm = input("Execute? [y/N] ")
                 if confirm.lower() != 'y':
                     continue
             else:
-                confirm = input("Execute? [y/N] ")
-                if confirm.lower() != 'y':
-                    print("Cancelled.")
-                    continue
+                # Check if confirmation is required for low-risk commands
+                if get_preference("confirm_before_execute"):
+                    confirm = input("Execute? [y/N] ")
+                    if confirm.lower() != 'y':
+                        print("Cancelled.")
+                        continue
 
             if sandboxed:
                 output = execute_sandboxed(command)
             else:
                 output = execute_unsafe(command)
-            print(output if output else "(no output)")
+            # print(output if output else "(no output)")
     finally:
-        if sandboxed and mounted_paths:
-            print("\n🦀 Cleaning up...")
+        if sandboxed and mounted_paths and not cleanup_done:
+            print("\n[*] Cleaning up...")
             cleanup_mounts(mounted_paths)
+            cleanup_done = True
 
 if __name__ == "__main__":
     main()

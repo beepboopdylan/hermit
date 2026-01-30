@@ -1,6 +1,7 @@
 import re
 from dataclasses import dataclass
 from enum import Enum
+from hermit.config import get_safety_setting
 
 class RiskLevel(Enum):
     LOW = "low"           # Read-only, safe
@@ -47,11 +48,21 @@ MEDIUM_RISK_PATTERNS = [
     (r">>\s*\w+", "Appending to file"),
 ]
 
-def check_command(command: str) -> PolicyResult:
+def get_blocked_patterns() -> list:
+    """Get blocked patterns, respecting config settings."""
+    patterns = list(BLOCKED_PATTERNS)
 
+    # block_rm_rf is enforced via BLOCKED_PATTERNS by default
+    # If user disables it, we could remove those patterns (not recommended)
+    return patterns
+
+
+def check_command(command: str) -> PolicyResult:
+    """Check command against policy rules, respecting config safety settings."""
     command_lower = command.lower().strip()
 
-    for pattern, reason in BLOCKED_PATTERNS:
+    # Check blocked patterns
+    for pattern, reason in get_blocked_patterns():
         if re.search(pattern, command_lower):
             return PolicyResult(
                 allowed=False,
@@ -59,6 +70,7 @@ def check_command(command: str) -> PolicyResult:
                 reason=reason
             )
 
+    # Check high risk patterns
     for pattern, reason in HIGH_RISK_PATTERNS:
         if re.search(pattern, command_lower):
             return PolicyResult(
@@ -66,21 +78,34 @@ def check_command(command: str) -> PolicyResult:
                 risk=RiskLevel.HIGH,
                 reason=reason
             )
-    
+
+    # Check medium risk patterns
     for pattern, reason in MEDIUM_RISK_PATTERNS:
         if re.search(pattern, command_lower):
+            # If delete confirmation is required, elevate delete operations
+            if get_safety_setting("require_confirmation_for_delete"):
+                if re.search(r"rm\s+", command_lower):
+                    return PolicyResult(
+                        allowed=True,
+                        risk=RiskLevel.HIGH,
+                        reason=f"{reason} (confirmation required)"
+                    )
             return PolicyResult(
                 allowed=True,
                 risk=RiskLevel.MEDIUM,
                 reason=reason
             )
 
-    # Default: low risk (read-only operations)
     return PolicyResult(
         allowed=True,
         risk=RiskLevel.LOW,
         reason="Read-only operation"
     )
+
+
+def get_max_files_limit() -> int:
+    """Get the max files per operation limit from config."""
+    return get_safety_setting("max_files_per_operation") or 100
 
 if __name__ == "__main__":
     # Test cases

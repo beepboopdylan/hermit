@@ -1,18 +1,20 @@
 import os
 import subprocess
 from pathlib import Path
+from hermit.config import get_allowed_directories
 
 SANDBOX_ROOT = "/home/ubuntu/sandbox-root"
 
-ALLOWED_MOUNTS = [
-    ("/home/ubuntu/Downloads", "/workspace/downloads"),
-    ("/home/ubuntu/projects", "/workspace/projects"),
-]
+
+def get_mount_list() -> list:
+    """Get mount mappings from config, returns list of (host, sandbox) tuples."""
+    dirs = get_allowed_directories()
+    return [(d["host"], d["sandbox"]) for d in dirs]
 
 def setup_mounts():
     mounted = []
 
-    for host_path, sandbox_path in ALLOWED_MOUNTS:
+    for host_path, sandbox_path in get_mount_list():
         host_full = os.path.expanduser(host_path)
         sandbox_full = f"{SANDBOX_ROOT}{sandbox_path}"
 
@@ -43,10 +45,10 @@ def cleanup_mounts(mounted: list):
 
 def list_mounts():
     print("\nExposed folders:")
-    for host_path, sandbox_path in ALLOWED_MOUNTS:
+    for host_path, sandbox_path in get_mount_list():
         host_full = os.path.expanduser(host_path)
-        exists = "✅" if os.path.exists(host_full) else "❌"
-        print(f"   {exists} {host_path} → {sandbox_path}")
+        #exists = "✅" if os.path.exists(host_full) else "❌"
+        print(f"   {host_path} → {sandbox_path}")
     print()
                 
 if __name__ == "__main__":
