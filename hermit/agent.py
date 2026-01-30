@@ -6,10 +6,11 @@ import sys
 import signal
 from hermit.policy import check_command, RiskLevel
 from hermit.actions import parse_action
-from hermit.mounts import setup_mounts, cleanup_mounts, list_mounts
+from hermit.mounts import setup_mounts, cleanup_mounts
 from hermit.llm import get_completion
 from hermit.config import ensure_setup, config_cli, get_preference
 from hermit import audit
+from hermit import ui
 
 SANDBOX_ROOT = "/home/ubuntu/sandbox-root"
 
@@ -45,13 +46,16 @@ User: "what projects do I have" → {"action": "list_files", "path": "/workspace
 mounted_paths = []
 cleanup_done = False
 
+
 def get_action(user_input: str) -> str:
     """Ask LLM to return a structured JSON action."""
     return get_completion(SYSTEM_PROMPT, user_input)
 
+
 def execute_unsafe(command: str) -> str:
     result = subprocess.run(command, shell=True, capture_output=True, text=True)
     return result.stdout + result.stderr
+
 
 def execute_sandboxed(command: str) -> str:
     full_command = [
@@ -71,61 +75,103 @@ def execute_sandboxed(command: str) -> str:
     )
     return result.stdout + result.stderr
 
+
 def cleanup_handler(signum, frame):
     """Handle Ctrl+C gracefully."""
     global cleanup_done
     if not cleanup_done:
-        print("\n\n[*] Cleaning up...")
+        print("\n")
+        ui.info("Cleaning up...")
         cleanup_mounts(mounted_paths)
         cleanup_done = True
-    print("Goodbye!")
+    print("  Goodbye!")
     sys.exit(0)
+
+
+def show_help():
+    """Show help with styled output."""
+    ui.print_banner()
+    print(f"  {ui.bold('Sandboxed AI Shell Assistant')}")
+    print()
+    print(f"  {ui.dim('Usage:')} sudo hermit [OPTIONS]")
+    print()
+    print(f"  {ui.dim('Options:')}")
+    print(f"    --unsafe     Disable sandbox (not recommended)")
+    print(f"    --help       Show this help message")
+    print()
+    print(f"  {ui.dim('Commands (inside hermit):')}")
+    print(f"    help                     Show commands")
+    print(f"    config show              Show configuration")
+    print(f"    config set <key> <val>   Set a preference")
+    print(f"    config add-directory     Add a folder to sandbox")
+    print(f"    audit                    Show command history")
+    print(f"    exit                     Quit hermit")
+    print()
+    print(f"  {ui.dim('Examples:')}")
+    print(f"    sudo hermit              Start in sandboxed mode")
+    print(f"    hermit --unsafe          Start without sandbox")
+    print()
+
+
+def show_inline_help():
+    """Show help when inside the REPL."""
+    print()
+    print(f"  {ui.bold('Commands:')}")
+    print(f"    {ui.dim('help')}                     Show this help")
+    print(f"    {ui.dim('config show')}              Show configuration")
+    print(f"    {ui.dim('config set <key> <val>')}   Set a preference")
+    print(f"    {ui.dim('config add-directory')}     Add a folder to sandbox")
+    print(f"    {ui.dim('audit')}                    Show command history")
+    print(f"    {ui.dim('exit')}                     Quit hermit")
+    print()
+    print(f"  {ui.bold('Or just ask me to do something:')}")
+    print(f"    {ui.dim('\"show my downloads\"')}")
+    print(f"    {ui.dim('\"organize files by type\"')}")
+    print(f"    {ui.dim('\"find all .py files\"')}")
+    print()
+
 
 def main():
     global mounted_paths, cleanup_done
-    sandboxed = "--sandbox" in sys.argv
+
+    # Handle --help before setup
+    if "--help" in sys.argv or "-h" in sys.argv:
+        show_help()
+        return
+
+    sandboxed = "--unsafe" not in sys.argv
 
     config = ensure_setup()
     backend = config["llm_backend"]
 
-    print(r"""
-       __
-      (  )_
-     (_____)_
-    (________)""")
+    ui.print_banner()
+    ui.print_status(sandboxed, backend)
 
     if sandboxed:
-        print("....//( 00 )\\.............................")
-        print("|                                        |")
-        print("|  HERMIT       [SANDBOXED MODE]         |")
-        print("..........................................")
-        print(f"  Backend: {backend}")
-        print("  Security: namespaces + chroot + seccomp + policy engine\n")
-
-        list_mounts()
+        print(f"  {ui.dim('Mounting folders...')}")
         mounted_paths = setup_mounts()
-
+        print()
         signal.signal(signal.SIGINT, cleanup_handler)
-
     else:
-        print("....//( 00 )\\.............................")
-        print("|                                        |")
-        print("|  HERMIT       [UNSAFE MODE].           |")
-        print("..........................................")
-        print(f"  Backend: {backend}")
-        print("  *** WARNING: No sandbox - be careful! ***")
-        
-    print("  Type 'exit' to quit, 'audit' for history, 'config' for settings\n")
-    
+        ui.warning("Sandbox disabled - commands run directly on your system")
+        print()
+
+    print(f"  Ready. Type {ui.dim('help')} for commands.")
+    ui.separator()
+
     try:
         while True:
-            user_input = input("hermit> ")
+            user_input = ui.prompt()
 
             if user_input.lower() in ['exit', 'quit']:
                 break
             if not user_input:
                 continue
-            
+
+            if user_input.lower() in ['help', '?']:
+                show_inline_help()
+                continue
+
             if user_input.lower() == 'audit':
                 audit.show_recent(10)
                 continue
@@ -135,51 +181,69 @@ def main():
                 config_cli(args)
                 continue
 
-            action = parse_action(get_action(user_input))
+            # Get action from LLM with spinner
+            spinner = ui.Spinner("Thinking")
+            spinner.start()
+            try:
+                action = parse_action(get_action(user_input))
+            finally:
+                spinner.stop()
 
             command = action.render()
 
-            print(f"Action: {action.describe()}")
-            print(f"Command: {command}")
+            # Show what we're doing
+            ui.info(action.describe())
+            ui.command_box(command)
 
             audit.log_command(user_input, command)
 
             policy = check_command(command)
             audit.log_policy_check(command, policy.allowed, policy.risk.value, policy.reason)
 
+            # Handle policy result
             if not policy.allowed:
-                print(f"BLOCKED [{policy.risk.value}]: {policy.reason}")
+                ui.risk_display("blocked", policy.reason)
                 audit.log_blocked(command, policy.reason)
                 continue
+
+            ui.risk_display(policy.risk.value, policy.reason)
+
             if policy.risk == RiskLevel.HIGH:
-                print(f"HIGH RISK: {policy.reason}")
-                confirm = input("Type 'yes' to confirm: ")
+                confirm = input(f"\n  Type '{ui.orange('yes')}' to confirm: ")
                 if confirm.lower() != 'yes':
-                    print("Cancelled.")
+                    ui.info("Cancelled.")
                     continue
             elif policy.risk == RiskLevel.MEDIUM:
-                print(f"[!] CAUTION: {policy.reason}")
-                confirm = input("Execute? [y/N] ")
+                confirm = input(f"  Run? ({ui.green('y')}/{ui.dim('n')}) ")
                 if confirm.lower() != 'y':
+                    ui.info("Cancelled.")
                     continue
             else:
-                # Check if confirmation is required for low-risk commands
                 if get_preference("confirm_before_execute"):
-                    confirm = input("Execute? [y/N] ")
+                    confirm = input(f"  Run? ({ui.green('y')}/{ui.dim('n')}) ")
                     if confirm.lower() != 'y':
-                        print("Cancelled.")
+                        ui.info("Cancelled.")
                         continue
 
+            # Execute
             if sandboxed:
                 output = execute_sandboxed(command)
             else:
                 output = execute_unsafe(command)
-            # print(output if output else "(no output)")
+
+            ui.success("Done")
+
+            if output and output.strip():
+                print()
+                print(ui.dim("  " + output.replace("\n", "\n  ")))
+
     finally:
         if sandboxed and mounted_paths and not cleanup_done:
-            print("\n[*] Cleaning up...")
+            print()
+            ui.info("Cleaning up...")
             cleanup_mounts(mounted_paths)
             cleanup_done = True
+
 
 if __name__ == "__main__":
     main()

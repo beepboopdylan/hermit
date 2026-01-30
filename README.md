@@ -1,94 +1,172 @@
 # Hermit
 
-A sandboxed AI shell agent. Describe what you want in natural language, and Hermit translates it to structured actions and runs them in an isolated environment.
+Want to organize files, search code, or manage your system? 
+
+Describe what you want in natural language, and Hermit translates it to safe, structured actions running in an isolated environment.
+
+```
+       __
+      (  )_
+     (_____)_
+    (________)
+    //( 00 )\\
+
+  hermit v0.1.0
+
+  ● Sandbox active
+  ● Backend: openai
+
+  Mounting folders...
+    ~/Downloads → /workspace/downloads ✓
+    ~/projects → /workspace/projects ✓
+
+  Ready. Type help for commands.
+
+hermit❯ organize my downloads by file type
+
+  ◐ Thinking...
+
+  I'll organize your downloads folder.
+
+  ┌ Command ─────────────────────────────────
+  │ organize_by_type /workspace/downloads
+  └──────────────────────────────────────────
+
+  Risk: medium — Moving files
+
+  Run? (y/n) y
+
+  ✓ Done
+```
 
 ## Features
 
-- **Structured actions** - LLM returns JSON, not raw shell (v2)
-- **Filesystem isolation** - Commands run in a chroot jail (`~/sandbox-root`)
-- **Process isolation** - PID namespace via `unshare`
-- **Syscall filtering** - seccomp blocks dangerous operations (reboot, mount, ptrace, network)
-- **Policy engine** - Risk-based command approval with audit logging
+- **Natural language** → Describe tasks, Hermit figures out the commands
+- **Structured actions** → LLM outputs JSON, not raw shell code
+- **Sandboxed execution** → chroot + namespaces + seccomp filtering
+- **Policy engine** → Risk-based approval with audit logging
+- **Configurable** → Add folders, tweak safety settings via `config`
 
-## Quick Start
+## Installation
 
 ```bash
-# Install dependencies
-python3 -m venv venv
-source venv/bin/activate
-pip install openai python-dotenv
+# Clone and install
+git clone https://github.com/beepboopdylan/hermit.git
+cd hermit
+pip install -e .
 
-# Set up your API key
-echo "OPENAI_API_KEY=sk-..." > .env
+# Run (requires sudo for sandbox mounts)
+sudo hermit
+```
 
-# Run (requires sudo for namespaces)
-sudo venv/bin/python src/agent.py --sandbox
+Or install from GitHub directly:
+
+```bash
+pip install git+https://github.com/beepboopdylan/hermit.git
 ```
 
 ## Usage
 
 ```bash
-sudo venv/bin/python src/agent.py --sandbox
+# Sandboxed mode (default, recommended)
+sudo hermit
 
-🔒 Hermit (sandboxed mode)
-   Security: namespaces + chroot + seccomp + policy engine
-   Output: structured actions
-   Type 'exit' to quit, 'audit' for history
+# Without sandbox (for development)
+hermit --unsafe
 
-🦀 > show all files
-Action: List files in .
-Command: ls -al
-Execute? [y/N] y
+# Show help
+hermit --help
 ```
 
-## v1 vs v2
+### Inside Hermit
 
-| | v1 (raw shell) | v2 (structured actions) |
-|--|----------------|------------------------|
-| LLM output | `ls -la; rm -rf /` | `{"action": "list_files", "path": "."}` |
-| Command built by | LLM | Your code |
-| Injection risk | High | Low (params escaped) |
-| Tag | `v1.0.0` | Current |
+```
+hermit❯ help
 
-## Structured Actions
+  Commands:
+    help                     Show this help
+    config show              Show configuration
+    config set <key> <val>   Set a preference
+    config add-directory     Add a folder to sandbox
+    audit                    Show command history
+    exit                     Quit hermit
 
-LLM can only use these predefined actions:
-
-```json
-{"action": "list_files", "path": ".", "all": true, "long": true}
-{"action": "read_file", "path": "filename"}
-{"action": "create_file", "path": "filename", "content": "text"}
-{"action": "delete_files", "path": ".", "pattern": "*.log", "recursive": false}
-{"action": "move_file", "source": "old", "destination": "new"}
-{"action": "create_directory", "path": "dirname"}
-{"action": "find_files", "path": ".", "pattern": "*.py"}
-{"action": "run_command", "command": "..."}  # fallback
+  Or just ask me to do something:
+    "show my downloads"
+    "organize files by type"
+    "find all .py files"
 ```
 
-Your code renders these to shell commands with proper escaping.
+## Configuration
+
+Hermit stores config in `~/.hermit/config.json`:
+
+```bash
+# Add a folder to the sandbox
+hermit❯ config add-directory ~/Music
+
+# Change a setting
+hermit❯ config set confirm_before_execute false
+
+# View all settings
+hermit❯ config show
+```
+
+### Available Settings
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `confirm_before_execute` | `true` | Ask before running low-risk commands |
+| `dry_run_by_default` | `false` | Show commands without executing |
+| `block_rm_rf` | `true` | Block recursive force delete |
+| `require_confirmation_for_delete` | `true` | Elevate delete ops to high risk |
+| `max_files_per_operation` | `100` | Limit bulk operations |
 
 ## Security Layers
 
 | Layer | Protection |
 |-------|------------|
-| **Structured actions** | LLM picks from fixed menu, you build commands |
+| **Structured actions** | LLM picks from a fixed menu; you build the commands |
 | **chroot** | Filesystem restricted to `~/sandbox-root` |
-| **PID namespace** | Process isolation - can't see host processes |
-| **seccomp** | Blocks: reboot, mount, ptrace, kernel modules |
-| **Network** | Socket syscalls return EPERM |
-| **Policy** | Regex-based command blocking + risk levels |
+| **PID namespace** | Process isolation — can't see host processes |
+| **seccomp** | Blocks dangerous syscalls (reboot, mount, ptrace) |
+| **Policy engine** | Regex-based blocking + risk levels (low/medium/high/blocked) |
+| **Audit log** | Every command logged to `~/.hermit/audit.log` |
+
+## Structured Actions
+
+The LLM can only request these predefined actions:
+
+```json
+{"action": "list_files", "path": ".", "all": true, "long": true}
+{"action": "read_file", "path": "filename"}
+{"action": "create_file", "path": "filename", "content": "text"}
+{"action": "delete_files", "path": ".", "pattern": "*.log"}
+{"action": "move_file", "source": "old", "destination": "new"}
+{"action": "create_directory", "path": "dirname"}
+{"action": "find_files", "path": ".", "pattern": "*.py"}
+{"action": "organize_by_type", "path": "/workspace/downloads"}
+{"action": "run_command", "command": "..."}  // fallback only
+```
+
+Your code renders these to shell commands with proper escaping — the LLM never writes raw shell.
 
 ## Project Structure
 
 ```
-sandboxed-agent/
-├── src/
-│   ├── agent.py           # Main REPL
-│   ├── actions.py         # Structured action definitions
-│   ├── sandbox_wrapper.py # Runs inside chroot, applies seccomp
-│   ├── policy.py          # Command risk assessment
-│   └── audit.py           # Logging
-└── ~/sandbox-root/        # Chroot jail with minimal binaries
+hermit/
+├── __init__.py
+├── __main__.py        # python -m hermit
+├── agent.py           # Main REPL
+├── actions.py         # Structured action definitions
+├── config.py          # Configuration management
+├── policy.py          # Command risk assessment
+├── mounts.py          # Sandbox mount handling
+├── ui.py              # Terminal UI helpers
+├── llm.py             # OpenAI integration
+├── audit.py           # Command logging
+├── sandbox_wrapper.py # Runs inside chroot
+└── seccomp_filter.py  # Syscall filtering
 ```
 
 ## Requirements
@@ -96,4 +174,8 @@ sandboxed-agent/
 - Linux (namespaces/seccomp are Linux-only)
 - Python 3.10+
 - OpenAI API key
-- Root access (for unshare/chroot)
+- Root access (for sandbox mounts)
+
+## License
+
+MIT

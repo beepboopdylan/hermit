@@ -2,6 +2,7 @@ import os
 import subprocess
 from pathlib import Path
 from hermit.config import get_allowed_directories
+from hermit import ui
 
 SANDBOX_ROOT = "/home/ubuntu/sandbox-root"
 
@@ -11,7 +12,9 @@ def get_mount_list() -> list:
     dirs = get_allowed_directories()
     return [(d["host"], d["sandbox"]) for d in dirs]
 
+
 def setup_mounts():
+    """Mount configured directories into the sandbox."""
     mounted = []
 
     for host_path, sandbox_path in get_mount_list():
@@ -19,29 +22,30 @@ def setup_mounts():
         sandbox_full = f"{SANDBOX_ROOT}{sandbox_path}"
 
         if not os.path.exists(host_full):
-            print(f"Skipping {host_path} (doesn't exist)")
+            ui.mount_status(host_path, sandbox_path, False)
             continue
-        
+
         # create mount point in sandbox
         os.makedirs(sandbox_full, exist_ok=True)
 
         result = subprocess.run(
-            ["mount","--bind", host_full, sandbox_full],
+            ["mount", "--bind", host_full, sandbox_full],
             capture_output=True
         )
 
         if result.returncode == 0:
-            print(f"Mounted {host_path} → {sandbox_path}")
+            ui.mount_status(host_path, sandbox_path, True)
             mounted.append(sandbox_full)
         else:
-            print(f"Failed to mount {host_path}")
-    
+            ui.mount_status(host_path, sandbox_path, False)
+
     return mounted
 
+
 def cleanup_mounts(mounted: list):
+    """Unmount all mounted directories."""
     for mount_point in mounted:
         subprocess.run(["umount", mount_point], capture_output=True)
-        print(f"Unmounted {mount_point}")
 
 def list_mounts():
     print("\nExposed folders:")

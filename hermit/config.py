@@ -300,25 +300,32 @@ def start_ollama():
 
 def first_run_setup() -> dict:
     """Interactive first-run setup. Returns config."""
-    print("\n🦀 Welcome to Hermit!")
-    print("   First-time setup required.\n")
-    print("   Get your API key from: https://platform.openai.com/api-keys\n")
+    # Import here to avoid circular imports
+    from hermit import ui
+
+    ui.print_banner()
+    print(f"  {ui.bold('First Time Setup')}")
+    print()
+    print(f"  Get your API key from: {ui.dim('https://platform.openai.com/api-keys')}")
+    print()
 
     config = load_config()
 
     while True:
-        key = input("   OpenAI API key: ").strip()
+        key = input(f"  OpenAI API key: ").strip()
         if key.startswith("sk-") and len(key) > 20:
             break
-        print("   Invalid key format. Should start with 'sk-'")
+        ui.error("Invalid key format. Should start with 'sk-'")
 
     config["llm_backend"] = "openai"
     config["openai_key"] = key
     config["setup_complete"] = True
     save_config(config)
 
-    print("\n   OpenAI configured!")
-    print("   Config saved to ~/.hermit/config.json\n")
+    print()
+    ui.success("OpenAI configured!")
+    ui.info(f"Config saved to {ui.dim('~/.hermit/config.json')}")
+    print()
     return config
 
 def ensure_setup() -> dict:
