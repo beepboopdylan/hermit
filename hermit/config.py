@@ -36,6 +36,15 @@ DEFAULT_CONFIG = {
         "block_rm_rf": True,
         "require_confirmation_for_delete": True,
         "max_files_per_operation": 100,
+    },
+
+    # Cgroup resource limits
+    "cgroups": {
+        "enabled": True,
+        "memory_max_mb": 512,
+        "cpu_quota_percent": 50,
+        "pids_max": 100,
+        "timeout_seconds": 30,
     }
 }
 
@@ -201,6 +210,22 @@ def set_safety_setting(key: str, value) -> bool:
 
 """
 
+Cgroup Settings Management
+
+"""
+
+def get_cgroup_config() -> dict:
+    """Get cgroup configuration."""
+    config = load_config()
+    return config.get("cgroups", DEFAULT_CONFIG["cgroups"])
+
+def is_cgroups_enabled() -> bool:
+    """Check if cgroups are enabled in config."""
+    cgroup_config = get_cgroup_config()
+    return cgroup_config.get("enabled", True)
+
+"""
+
 Config Display
 
 """
@@ -241,6 +266,15 @@ def show_config():
     print(f"  Block rm -rf: {safety.get('block_rm_rf', True)}")
     print(f"  Confirm deletes: {safety.get('require_confirmation_for_delete', True)}")
     print(f"  Max files per op: {safety.get('max_files_per_operation', 100)}")
+
+    # Cgroups
+    print("\n[Resource Limits (cgroups)]")
+    cgroups = config.get("cgroups", {})
+    print(f"  Enabled: {cgroups.get('enabled', True)}")
+    print(f"  Memory max: {cgroups.get('memory_max_mb', 512)} MB")
+    print(f"  CPU quota: {cgroups.get('cpu_quota_percent', 50)}%")
+    print(f"  Max PIDs: {cgroups.get('pids_max', 100)}")
+    print(f"  Timeout: {cgroups.get('timeout_seconds', 30)}s")
 
     print("\n" + "=" * 50)
     print(f"  Config file: {CONFIG_FILE}")

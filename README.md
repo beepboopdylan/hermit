@@ -157,7 +157,7 @@ The LLM can only request these predefined actions:
 {"action": "create_directory", "path": "dirname"}
 {"action": "find_files", "path": ".", "pattern": "*.py"}
 {"action": "organize_by_type", "path": "/workspace/downloads"}
-{"action": "run_command", "command": "..."}  // fallback only
+{"action": "run_command", "command": "..."}
 ```
 
 Your code renders these to shell commands with proper escaping — the LLM never writes raw shell.

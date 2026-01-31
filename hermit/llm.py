@@ -37,11 +37,9 @@ def get_completion(system_prompt: str, user_input: str) -> str:
 
     reply = response.choices[0].message.content.strip()
 
-    # Save to history
     conversation_history.append({"role": "user", "content": user_input})
     conversation_history.append({"role": "assistant", "content": reply})
 
-    # Trim history if too long
     if len(conversation_history) > MAX_HISTORY_TURNS * 2:
         conversation_history = conversation_history[-(MAX_HISTORY_TURNS * 2):]
 

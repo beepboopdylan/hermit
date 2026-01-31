@@ -6,3 +6,4 @@ __pycache__/
 hello.txt
 drafts/
 hermit_shell.egg-info/
+.claudeignore

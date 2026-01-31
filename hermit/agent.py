@@ -9,7 +9,8 @@ from hermit.policy import check_command, RiskLevel
 from hermit.actions import parse_action
 from hermit.mounts import setup_mounts, cleanup_mounts
 from hermit.llm import get_completion, clear_history
-from hermit.config import ensure_setup, config_cli, get_preference
+from hermit.config import ensure_setup, config_cli, get_preference, get_cgroup_config
+from hermit.cgroups import setup_cgroup, cleanup_cgroup
 from hermit import audit
 from hermit import ui
 
@@ -90,22 +91,35 @@ def execute_unsafe(command: str) -> str:
 
 
 def execute_sandboxed(command: str) -> str:
-    full_command = [
-        "unshare",
-        "--mount",
-        "--pid",
-        "--fork",
-        "--mount-proc",
-        "chroot", SANDBOX_ROOT,
-        "/usr/bin/python3", "/sandbox/sandbox_wrapper.py", command
-    ]
+    # Get timeout from config
+    cgroup_cfg = get_cgroup_config()
+    timeout = cgroup_cfg.get('timeout_seconds', 30)
 
-    result = subprocess.run(
-        full_command,
-        capture_output=True,
+    # Use bash wrapper to add process to cgroup BEFORE running unshare
+    # This ensures the unshare process and all children are in the cgroup
+    cgroup_path = "/sys/fs/cgroup/hermit-sandbox"
+    wrapper_command = f'''
+        echo $$ > {cgroup_path}/cgroup.procs
+        exec unshare --mount --pid --fork --mount-proc \
+            chroot {SANDBOX_ROOT} \
+            /usr/bin/python3 /sandbox/sandbox_wrapper.py '{command.replace("'", "'\"'\"'")}'
+    '''
+
+    process = subprocess.Popen(
+        ["bash", "-c", wrapper_command],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True
     )
-    return result.stdout + result.stderr
+
+    # Wait for completion with timeout
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+        return stdout + stderr
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.communicate()  # Clean up
+        return f"Command timed out after {timeout} seconds"
 
 
 def cleanup_handler(signum, frame):
@@ -115,6 +129,7 @@ def cleanup_handler(signum, frame):
         print("\n")
         ui.info("Cleaning up...")
         cleanup_mounts(mounted_paths)
+        cleanup_cgroup()
         cleanup_done = True
     print("  Goodbye!")
     sys.exit(0)
@@ -188,6 +203,13 @@ def main():
     if sandboxed:
         print(f"  {ui.dim('Mounting folders...')}")
         mounted_paths = setup_mounts()
+        print(f"  {ui.dim('Setting up cgroups...')}")
+        cgroup_cfg = get_cgroup_config()
+        setup_cgroup(
+            memory_max_mb=cgroup_cfg.get('memory_max_mb', 512),
+            cpu_quota_percent=cgroup_cfg.get('cpu_quota_percent', 50),
+            pids_max=cgroup_cfg.get('pids_max', 100)
+        )
         print()
         signal.signal(signal.SIGINT, cleanup_handler)
     else:
@@ -290,6 +312,7 @@ def main():
             print()
             ui.info("Cleaning up...")
             cleanup_mounts(mounted_paths)
+            cleanup_cgroup()
             cleanup_done = True
 
 

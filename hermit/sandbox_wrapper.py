@@ -95,4 +95,5 @@ if __name__ == "__main__":
     setup_seccomp()
     
     # Execute the command via bash (for brace expansion support)
-    os.execvp("/bin/bash", ["/bin/bash", "-c", command])
+    os.execvp("/bin/bash", ["/bin/bash", "-c", f"export LC_ALL=C LANG=C; {command}"])
+
