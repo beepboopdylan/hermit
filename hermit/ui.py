@@ -144,13 +144,90 @@ def print_banner(version: str = "0.1.0"):
 """)
 
 
-def print_status(sandboxed: bool, backend: str):
+def print_status(sandboxed: bool):
     """Print status dots."""
     if sandboxed:
         print(f"  {green(DOT)} Sandbox active")
     else:
         print(f"  {yellow(DOT)} Sandbox {yellow('disabled')}")
-    print(f"  {green(DOT)} Backend: {backend}")
+    print(f"  {green(DOT)} OpenAI")
+    print()
+
+def print_tree(base_path: str, max_depth: int = 2, max_items: int = 8):
+    """Print a tree view of the workspace."""
+    import os
+    from pathlib import Path
+
+    def count_items(path):
+        """Count files and folders in a directory."""
+        try:
+            items = list(Path(path).iterdir())
+            files = sum(1 for i in items if i.is_file())
+            dirs = sum(1 for i in items if i.is_dir())
+            return files, dirs
+        except PermissionError:
+            return 0, 0
+
+    def walk_tree(path, prefix="", depth=0):
+        """Recursively print tree structure."""
+        if depth > max_depth:
+            return
+
+        try:
+            items = sorted(Path(path).iterdir(), key=lambda x: (x.is_file(), x.name.lower()))
+        except PermissionError:
+            print(f"{prefix}{dim('(permission denied)')}")
+            return
+
+        # Separate dirs and files
+        dirs = [i for i in items if i.is_dir()]
+        files = [i for i in items if i.is_file()]
+
+        # Show directories first
+        for i, item in enumerate(dirs[:max_items]):
+            is_last = (i == len(dirs) - 1) and len(files) == 0
+            connector = "└── " if is_last else "├── "
+            child_prefix = "    " if is_last else "│   "
+
+            file_count, dir_count = count_items(item)
+            info_parts = []
+            if file_count:
+                info_parts.append(f"{file_count} files")
+            if dir_count:
+                info_parts.append(f"{dir_count} folders")
+            info = dim(f" ({', '.join(info_parts)})") if info_parts else ""
+
+            print(f"  {prefix}{dim(connector)}{bold(item.name)}/{info}")
+
+            if depth < max_depth:
+                walk_tree(item, prefix + child_prefix, depth + 1)
+
+        if len(dirs) > max_items:
+            print(f"  {prefix}{dim('└── ')}...{dim(f' +{len(dirs) - max_items} more folders')}")
+
+        # Show files (summarized at depth > 0)
+        if files and depth == 0:
+            for i, item in enumerate(files[:max_items]):
+                is_last = i == len(files[:max_items]) - 1 and len(dirs) <= max_items
+                connector = "└── " if is_last else "├── "
+                print(f"  {prefix}{dim(connector)}{item.name}")
+            if len(files) > max_items:
+                print(f"  {prefix}{dim('└── ')}...{dim(f' +{len(files) - max_items} more files')}")
+        elif files and depth > 0:
+            if len(files) <= 3:
+                names = ", ".join(f.name for f in files)
+            else:
+                names = ", ".join(f.name for f in files[:2]) + f", +{len(files) - 2} more"
+            print(f"  {prefix}{dim('└── ')}{dim(names)}")
+
+    print()
+    print(f"  {bold('/workspace')}")
+
+    if not os.path.exists(base_path):
+        print(f"  {dim('(not mounted)')}")
+        return
+
+    walk_tree(base_path, "", 0)
     print()
 
 

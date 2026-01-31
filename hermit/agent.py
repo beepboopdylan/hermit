@@ -1,22 +1,52 @@
 from dotenv import load_dotenv
 load_dotenv()
 
+import os
 import subprocess
 import sys
 import signal
 from hermit.policy import check_command, RiskLevel
 from hermit.actions import parse_action
 from hermit.mounts import setup_mounts, cleanup_mounts
-from hermit.llm import get_completion
+from hermit.llm import get_completion, clear_history
 from hermit.config import ensure_setup, config_cli, get_preference
 from hermit import audit
 from hermit import ui
 
 SANDBOX_ROOT = "/home/ubuntu/sandbox-root"
 
+def is_sandbox_ready() -> bool:
+    """Check if sandbox environment is properly set up."""
+    required = [
+        f"{SANDBOX_ROOT}/bin/sh",
+        f"{SANDBOX_ROOT}/usr/bin/touch",
+        f"{SANDBOX_ROOT}/usr/bin/python3",
+        f"{SANDBOX_ROOT}/sandbox/sandbox_wrapper.py",
+    ]
+    return all(os.path.exists(p) for p in required)
+
+
+def ensure_sandbox():
+    """Check sandbox and offer to set it up if needed."""
+    if is_sandbox_ready():
+        return True
+
+    ui.print_banner()
+    print(f"  {ui.yellow(ui.WARN)} Sandbox not initialized\n")
+
+    confirm = input(f"  Run setup now? ({ui.green('y')}/{ui.dim('n')}) ")
+    if confirm.lower() != 'y':
+        print(f"\n  Run {ui.dim('sudo hermit-setup')} to initialize.\n")
+        sys.exit(1)
+
+    print()
+    from hermit.setup_sandbox import main as run_setup
+    run_setup()
+    return True
+
 SYSTEM_PROMPT = """You are Hermit, a secure shell assistant. Convert user requests to structured actions.
 
-Respond with ONLY valid JSON. No explanation, no markdown.
+IMPORTANT: Return exactly ONE JSON object per response. No explanation, no markdown.
 
 The user's files are mounted at:
 - /workspace/downloads (their Downloads folder)
@@ -34,12 +64,14 @@ Available actions:
 {"action": "organize_by_type", "path": "/workspace/downloads"}
 {"action": "run_command", "command": "echo hello"}
 
-Use run_command only if no other action fits.
+For BATCH operations (creating/deleting multiple files), use run_command with brace expansion:
+- Create 10 files: {"action": "run_command", "command": "touch /workspace/projects/file{1..10}.py"}
+- Delete all .tmp: {"action": "delete_files", "path": "/workspace/downloads", "pattern": "*.tmp"}
 
 Examples:
 User: "show my downloads" → {"action": "list_files", "path": "/workspace/downloads", "all": true, "long": true}
+User: "create 5 test files" → {"action": "run_command", "command": "touch /workspace/projects/test{1..5}.txt"}
 User: "organize downloads by type" → {"action": "organize_by_type", "path": "/workspace/downloads"}
-User: "what projects do I have" → {"action": "list_files", "path": "/workspace/projects", "long": true}
 """
 
 # Global for cleanup on exit
@@ -118,10 +150,12 @@ def show_inline_help():
     print()
     print(f"  {ui.bold('Commands:')}")
     print(f"    {ui.dim('help')}                     Show this help")
+    print(f"    {ui.dim('tree')}                     Show workspace structure")
     print(f"    {ui.dim('config show')}              Show configuration")
     print(f"    {ui.dim('config set <key> <val>')}   Set a preference")
     print(f"    {ui.dim('config add-directory')}     Add a folder to sandbox")
     print(f"    {ui.dim('audit')}                    Show command history")
+    print(f"    {ui.dim('clear')}                    Clear conversation history")
     print(f"    {ui.dim('exit')}                     Quit hermit")
     print()
     print(f"  {ui.bold('Or just ask me to do something:')}")
@@ -141,11 +175,15 @@ def main():
 
     sandboxed = "--unsafe" not in sys.argv
 
-    config = ensure_setup()
-    backend = config["llm_backend"]
+    # Check sandbox is ready (only in sandboxed mode)
+    if sandboxed:
+        ensure_sandbox()
+
+    # Check API key is configured
+    ensure_setup()
 
     ui.print_banner()
-    ui.print_status(sandboxed, backend)
+    ui.print_status(sandboxed)
 
     if sandboxed:
         print(f"  {ui.dim('Mounting folders...')}")
@@ -165,6 +203,7 @@ def main():
 
             if user_input.lower() in ['exit', 'quit']:
                 break
+
             if not user_input:
                 continue
 
@@ -174,6 +213,15 @@ def main():
 
             if user_input.lower() == 'audit':
                 audit.show_recent(10)
+                continue
+            
+            if user_input.lower() == 'clear':
+                clear_history()
+                print("Conversation history cleared.")
+                continue
+
+            if user_input.lower() == 'tree':
+                ui.print_tree(f"{SANDBOX_ROOT}/workspace")
                 continue
 
             if user_input.lower().startswith('config'):

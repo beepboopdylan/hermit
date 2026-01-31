@@ -1,99 +1,48 @@
 """
-LLM abstraction layer for Hermit.
-Supports both OpenAI and local Ollama.
+LLM layer for Hermit - OpenAI with conversation history.
 """
 
-import json
-import urllib.request
-from hermit.config import ensure_setup
+from openai import OpenAI
+from hermit.config import load_config
+
+# Conversation history for context
+conversation_history = []
+
+# Max history turns to keep (to avoid token limits)
+MAX_HISTORY_TURNS = 10
+
+
+def clear_history():
+    """Clear conversation history."""
+    global conversation_history
+    conversation_history = []
 
 def get_completion(system_prompt: str, user_input: str) -> str:
-    """Get completion from configured LLM backend."""
-    config = ensure_setup()
-    
-    if config["llm_backend"] == "ollama":
-        return _ollama_completion(system_prompt, user_input, config)
-    else:
-        return _openai_completion(system_prompt, user_input, config)
+    """Get completion from OpenAI with conversation history."""
+    global conversation_history
+    config = load_config()
 
-def _ollama_completion(system_prompt: str, user_input: str, config: dict) -> str:
-    """Get completion from local Ollama."""
-    payload = {
-        "model": config["ollama_model"],
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_input}
-        ],
-        "stream": False,
-    }
-    
-    req = urllib.request.Request(
-        "http://localhost:11434/api/chat",  # Use chat endpoint, not generate
-        data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json"}
-    )
-    
-    try:
-        with urllib.request.urlopen(req, timeout=120) as resp:  # Longer timeout for local
-            result = json.loads(resp.read().decode())
-            return result["message"]["content"].strip()
-    except urllib.error.HTTPError as e:
-        print(f"     Ollama error: {e}")
-        print(f"   Trying simpler request...")
-        return _ollama_completion_simple(user_input, config)
-    
-def _ollama_completion_simple(user_input: str, config: dict) -> str:
-    """Fallback: simpler prompt for weaker models."""
-    simple_prompt = f"""Convert this to a JSON action. Reply with ONLY JSON.
-
-Actions: list_files, read_file, create_file, delete_files, move_file, create_directory, find_files, organize_by_type, run_command
-
-User request: {user_input}
-
-Examples:
-"show files" → {{"action": "list_files", "path": ".", "all": true}}
-"organize by type" → {{"action": "organize_by_type", "path": "/workspace/downloads"}}
-"delete logs" → {{"action": "delete_files", "path": ".", "pattern": "*.log"}}
-
-JSON:"""
-
-    payload = {
-        "model": config["ollama_model"],
-        "prompt": simple_prompt,
-        "stream": False,
-    }
-    
-    req = urllib.request.Request(
-        "http://localhost:11434/api/generate",
-        data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json"}
-    )
-    
-    with urllib.request.urlopen(req, timeout=120) as resp:
-        result = json.loads(resp.read().decode())
-        return result["response"].strip()
-    
-def _openai_completion(system_prompt: str, user_input: str, config: dict) -> str:
-    """Get completion from OpenAI API."""
-    from openai import OpenAI
-    
     client = OpenAI(api_key=config["openai_key"])
-    
+
+    # Build messages with history
+    messages = [{"role": "system", "content": system_prompt}]
+    messages.extend(conversation_history)
+    messages.append({"role": "user", "content": user_input})
+
     response = client.chat.completions.create(
-        model=config["openai_model"],
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_input}
-        ],
+        model=config.get("openai_model", "gpt-4o-mini"),
+        messages=messages,
         max_tokens=256
     )
-    
-    return response.choices[0].message.content.strip()
 
-if __name__ == "__main__":
-    # Test
-    result = get_completion(
-        "You are a helpful assistant. Reply briefly.",
-        "What is 2 + 2?"
-    )
-    print(f"Response: {result}")
+    reply = response.choices[0].message.content.strip()
+
+    # Save to history
+    conversation_history.append({"role": "user", "content": user_input})
+    conversation_history.append({"role": "assistant", "content": reply})
+
+    # Trim history if too long
+    if len(conversation_history) > MAX_HISTORY_TURNS * 2:
+        conversation_history = conversation_history[-(MAX_HISTORY_TURNS * 2):]
+
+    return reply

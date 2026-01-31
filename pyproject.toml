@@ -33,6 +33,7 @@ dependencies = [
 
 [project.scripts]
 hermit = "hermit.agent:main"
+hermit-setup = "hermit.setup_sandbox:main"
 
 [project.urls]
 Homepage = "https://github.com/beepboopdylan/hermit"

@@ -5,6 +5,8 @@ Want to organize files, search code, or manage your system?
 Describe what you want in natural language, and Hermit translates it to safe, structured actions running in an isolated environment.
 
 ```
+$ sudo hermit
+
        __
       (  )_
      (_____)_
@@ -13,8 +15,20 @@ Describe what you want in natural language, and Hermit translates it to safe, st
 
   hermit v0.1.0
 
+  ⚠ Sandbox not initialized
+
+  Run setup now? (y/n) y
+
+  [1/7] Creating directory structure...
+  [2/7] Copying binaries and dependencies...
+  ✓ /bin/sh
+  ✓ /usr/bin/touch
+  ...
+
+  ✓ Sandbox setup complete!
+
   ● Sandbox active
-  ● Backend: openai
+  ● OpenAI
 
   Mounting folders...
     ~/Downloads → /workspace/downloads ✓
@@ -22,11 +36,7 @@ Describe what you want in natural language, and Hermit translates it to safe, st
 
   Ready. Type help for commands.
 
-hermit❯ organize my downloads by file type
-
-  ◐ Thinking...
-
-  I'll organize your downloads folder.
+hermit> organize my downloads by file type
 
   ┌ Command ─────────────────────────────────
   │ organize_by_type /workspace/downloads
@@ -55,7 +65,7 @@ git clone https://github.com/beepboopdylan/hermit.git
 cd hermit
 pip install -e .
 
-# Run (requires sudo for sandbox mounts)
+# Run (first run will set up sandbox automatically)
 sudo hermit
 ```
 
@@ -63,6 +73,7 @@ Or install from GitHub directly:
 
 ```bash
 pip install git+https://github.com/beepboopdylan/hermit.git
+sudo hermit
 ```
 
 ## Usage

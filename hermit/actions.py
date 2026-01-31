@@ -158,7 +158,7 @@ class RunCommand(Action):
         return self.command
     
     def describe(self) -> str:
-        return f"Run: {self.command}"
+        return "Run custom command"
 
 # Map action names to classes
 ACTION_MAP = {

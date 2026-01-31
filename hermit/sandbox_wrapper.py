@@ -8,6 +8,9 @@ It applies seccomp filters, then executes the command.
 import sys
 import os
 import errno
+
+# Set library path before importing pyseccomp (ctypes.util.find_library needs this)
+os.environ["LD_LIBRARY_PATH"] = "/usr/lib:/lib/x86_64-linux-gnu"
 import pyseccomp as seccomp
 
 def setup_seccomp():
@@ -91,5 +94,5 @@ if __name__ == "__main__":
     # Apply seccomp BEFORE running command
     setup_seccomp()
     
-    # Execute the command
-    os.system(command)
+    # Execute the command via bash (for brace expansion support)
+    os.execvp("/bin/bash", ["/bin/bash", "-c", command])

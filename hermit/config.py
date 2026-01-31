@@ -1,7 +1,5 @@
 import json
 import os
-import shutil
-import subprocess
 from pathlib import Path
 
 CONFIG_DIR = Path.home() / ".hermit"
@@ -9,8 +7,6 @@ CONFIG_FILE = CONFIG_DIR / "config.json"
 
 DEFAULT_CONFIG = {
     # LLM settings
-    "llm_backend": None,  # "ollama" or "openai"
-    "ollama_model": "tinyllama",
     "openai_key": None,
     "openai_model": "gpt-4o-mini",
     "setup_complete": False,
@@ -58,9 +54,11 @@ def save_config(config: dict):
     with open(CONFIG_FILE, "w") as f:
         json.dump(config, f, indent=2)
 
-# ============================================================
-# Directory Management
-# ============================================================
+"""
+
+Directory Management
+
+"""
 
 def get_allowed_directories() -> list:
     """Get list of allowed directory mappings."""
@@ -125,9 +123,11 @@ def remove_directory(host_path: str) -> bool:
         return True
     return False
 
-# ============================================================
-# Preferences Management
-# ============================================================
+"""
+
+Preferences Management
+
+"""
 
 def get_preference(key: str):
     """Get a preference value by key (supports dot notation)."""
@@ -169,9 +169,11 @@ def set_preference(key: str, value) -> bool:
     save_config(config)
     return True
 
-# ============================================================
-# Safety Settings Management
-# ============================================================
+"""
+
+Safety Settings Management
+
+"""
 
 def get_safety_setting(key: str):
     """Get a safety setting value."""
@@ -197,9 +199,11 @@ def set_safety_setting(key: str, value) -> bool:
     save_config(config)
     return True
 
-# ============================================================
-# Config Display
-# ============================================================
+"""
+
+Config Display
+
+"""
 
 def show_config():
     """Display current configuration in a readable format."""
@@ -211,14 +215,10 @@ def show_config():
 
     # LLM Settings
     print("\n[LLM Settings]")
-    print(f"  Backend: {config.get('llm_backend', 'not configured')}")
-    if config.get('llm_backend') == 'openai':
-        key = config.get('openai_key', '')
-        masked = key[:7] + '...' + key[-4:] if key and len(key) > 15 else '***'
-        print(f"  OpenAI Key: {masked}")
-        print(f"  OpenAI Model: {config.get('openai_model', 'gpt-4o-mini')}")
-    elif config.get('llm_backend') == 'ollama':
-        print(f"  Ollama Model: {config.get('ollama_model', 'tinyllama')}")
+    key = config.get('openai_key', '')
+    masked = key[:7] + '...' + key[-4:] if key and len(key) > 15 else '(not set)'
+    print(f"  OpenAI Key: {masked}")
+    print(f"  Model: {config.get('openai_model', 'gpt-4o-mini')}")
 
     # Directories
     print("\n[Allowed Directories]")
@@ -246,58 +246,6 @@ def show_config():
     print(f"  Config file: {CONFIG_FILE}")
     print("=" * 50 + "\n")
 
-def is_ollama_installed() -> bool:
-    return shutil.which("ollama") is not None
-
-def is_ollama_running() -> bool:
-    """Check if ollama server is running."""
-    try:
-        import urllib.request
-        urllib.request.urlopen("http://localhost:11434/api/tags", timeout=2)
-        return True
-    except:
-        return False
-
-def install_ollama():
-    """Install ollama."""
-    print("   Installing Ollama...")
-    result = subprocess.run(
-        "curl -fsSL https://ollama.ai/install.sh | sh",
-        shell=True,
-    )
-    if result.returncode != 0:
-        print("   Failed to install Ollama")
-        print(f"   {result.stderr.decode()}")
-        return False
-    return True
-
-def pull_ollama_model(model: str):
-    """Download an ollama model."""
-    print(f"   Downloading {model} (this may take a few minutes)...")
-    result = subprocess.run(
-        ["ollama", "pull", model],
-        capture_output=False  # Show progress
-    )
-    return result.returncode == 0
-
-def start_ollama():
-    """Start ollama server in background."""
-    if not is_ollama_running():
-        print("   Starting Ollama server...")
-        subprocess.Popen(
-            ["ollama", "serve"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
-        )
-        # Wait for it to start
-        import time
-        for _ in range(10):
-            if is_ollama_running():
-                return True
-            time.sleep(1)
-        return False
-    return True
-
 def first_run_setup() -> dict:
     """Interactive first-run setup. Returns config."""
     # Import here to avoid circular imports
@@ -317,7 +265,6 @@ def first_run_setup() -> dict:
             break
         ui.error("Invalid key format. Should start with 'sk-'")
 
-    config["llm_backend"] = "openai"
     config["openai_key"] = key
     config["setup_complete"] = True
     save_config(config)
@@ -337,10 +284,11 @@ def ensure_setup() -> dict:
 
     return config
 
+"""
 
-# ============================================================
-# CLI Interface
-# ============================================================
+CLI Interface
+
+"""
 
 def config_cli(args: list) -> bool:
     """Handle 'hermit config' subcommands.
