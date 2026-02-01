@@ -96,10 +96,12 @@ hermit❯ help
 
   Commands:
     help                     Show this help
+    tree                     Show workspace structure
     config show              Show configuration
     config set <key> <val>   Set a preference
     config add-directory     Add a folder to sandbox
     audit                    Show command history
+    clear                    Clear conversation history
     exit                     Quit hermit
 
   Or just ask me to do something:
