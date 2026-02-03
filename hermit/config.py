@@ -44,7 +44,7 @@ DEFAULT_CONFIG = {
         "memory_max_mb": 512,
         "cpu_quota_percent": 50,
         "pids_max": 100,
-        "timeout_seconds": 30,
+        "timeout_seconds": 60,
     }
 }
 
