@@ -99,6 +99,21 @@ def risk_display(level: str, reason: str):
     elif level == "blocked":
         print(f"  {red(CROSS)} {red('BLOCKED')} — {reason}")
 
+def progress_bar(percent: int, width: int = 40) -> str:
+    """Return a progress bar string."""
+    filled = int(width * percent / 100)
+    bar = "█" * filled + "░" * (width - filled)
+    return f"[{bar}] {percent}%"
+
+def download_progress(current: int, total: int, width: int = 40):
+    """Print download progress on same line."""
+    if total > 0:
+        percent = min(100, current * 100 // total)
+        mb_current = current / (1024 * 1024)
+        mb_total = total / (1024 * 1024)
+        bar = progress_bar(percent, width)
+        sys.stdout.write(f"\r  {bar} ({mb_current:.1f}/{mb_total:.1f} MB)")
+        sys.stdout.flush()
 
 class Spinner:
     """Animated spinner for thinking/loading states."""
@@ -143,15 +158,12 @@ def print_banner(version: str = "0.1.0"):
   {bold('hermit')} {dim(f'v{version}')}
 """)
 
-
 def print_status(sandboxed: bool):
     """Print status dots."""
     if sandboxed:
         print(f"  {green(DOT)} Sandbox active")
     else:
         print(f"  {yellow(DOT)} Sandbox {yellow('disabled')}")
-    print(f"  {green(DOT)} OpenAI")
-    print()
 
 def print_tree(base_path: str, max_depth: int = 2, max_items: int = 8):
     """Print a tree view of the workspace."""

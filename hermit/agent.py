@@ -8,7 +8,8 @@ import signal
 from hermit.policy import check_command, RiskLevel
 from hermit.actions import parse_action
 from hermit.mounts import setup_mounts, cleanup_mounts
-from hermit.llm import get_completion, clear_history
+from hermit.llm_backend import create_backend, LLMBackend
+from hermit.config import load_config, get_preference, get_cgroup_config, set_active_backend
 from hermit.config import ensure_setup, config_cli, get_preference, get_cgroup_config
 from hermit.cgroups import setup_cgroup, cleanup_cgroup
 from hermit import audit
@@ -78,11 +79,35 @@ User: "organize downloads by type" → {"action": "organize_by_type", "path": "/
 # Global for cleanup on exit
 mounted_paths = []
 cleanup_done = False
+llm_backend: LLMBackend = None
+
+def init_llm_backend():
+    """Initialize LLM backend from config."""
+    global llm_backend
+    from hermit import ui
+    config = load_config()
+    llm_backend = create_backend(config)
+    
+    if not llm_backend.is_available():
+        ui.error(f"Backend not configured properly")
+        sys.exit(1)
+
+    if config.get("llm_backend") == "llamacpp":
+        ui.info("Loading model...")
+        try:
+            # This triggers the lazy load
+            llm_backend._get_llm()
+        except Exception as e:
+            ui.error(f"Failed to load model: {e}")
+            sys.exit(1)
+    
+    return llm_backend
 
 
 def get_action(user_input: str) -> str:
     """Ask LLM to return a structured JSON action."""
-    return get_completion(SYSTEM_PROMPT, user_input)
+    global llm_backend
+    return llm_backend.get_completion(SYSTEM_PROMPT, user_input)
 
 
 def execute_unsafe(command: str) -> str:
@@ -147,19 +172,18 @@ def show_help():
     print(f"    --help       Show this help message")
     print()
     print(f"  {ui.dim('Commands (inside hermit):')}")
-    print(f"    help                     Show commands")
-    print(f"    config show              Show configuration")
-    print(f"    config set <key> <val>   Set a preference")
-    print(f"    config add-directory     Add a folder to sandbox")
-    print(f"    audit                    Show command history")
-    print(f"    exit                     Quit hermit")
+    print(f"    help                        Show commands")
+    print(f"    tree                        Show workspace structure")
+    print(f"    config show                 Show configuration")
+    print(f"    config backend <name>       Switch LLM backend")
+    print(f"    config set <key> <val>      Set a preference")
+    print(f"    config add-directory <path> Add folder to sandbox")
+    print(f"    config remove-directory     Remove folder")
+    print(f"    audit                       Show command history")
+    print(f"    clear                       Clear conversation")
+    print(f"    exit                        Quit hermit")
     print()
-    print(f"  {ui.dim('Examples:')}")
-    print(f"    sudo hermit              Start in sandboxed mode")
-    print(f"    hermit --unsafe          Start without sandbox")
-    print()
-
-
+    
 def show_inline_help():
     """Show help when inside the REPL."""
     print()
@@ -197,8 +221,12 @@ def main():
     # Check API key is configured
     ensure_setup()
 
+    init_llm_backend()
+    
     ui.print_banner()
     ui.print_status(sandboxed)
+
+    print(f"  {ui.green(ui.DOT)} LLM: {llm_backend.get_name()}")
 
     if sandboxed:
         print(f"  {ui.dim('Mounting folders...')}")
@@ -238,7 +266,7 @@ def main():
                 continue
             
             if user_input.lower() == 'clear':
-                clear_history()
+                llm_backend.clear_history()
                 print("Conversation history cleared.")
                 continue
 
@@ -248,6 +276,15 @@ def main():
 
             if user_input.lower().startswith('config'):
                 args = user_input.split()[1:] if len(user_input.split()) > 1 else []
+
+                if len(args) >= 2 and args[0] == "backend":
+                    if set_active_backend(args[1]):
+                        init_llm_backend()
+                        print(f"  ✓ Switched to {llm_backend.get_name()}")
+                    else:
+                        print(f"  ✗ Backend '{args[1]}' not configured")
+                    continue
+                
                 config_cli(args)
                 continue
 

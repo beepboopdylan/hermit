@@ -1,15 +1,82 @@
 import json
 import os
 from pathlib import Path
+import subprocess
+import sys 
+
+def _check_llamacpp_installed() -> bool:
+    """Check if llama-cpp-python is installed."""
+    try:
+        import llama_cpp
+        return True
+    except ImportError:
+        return False
+
+def _install_llamacpp() -> bool:
+    """Install llama-cpp-python. Returns True if successful."""
+    from hermit import ui
+
+    print()
+    ui.info("Installing llama-cpp-python...")
+    print()
+    
+    try:
+        # Try pre-built CPU wheel first (fast)
+        result = subprocess.run(
+            [
+                sys.executable, "-m", "pip", "install", 
+                "llama-cpp-python",
+                "--extra-index-url", "https://abetlen.github.io/llama-cpp-python/whl/cpu"
+            ]
+        )
+        
+        if result.returncode == 0:
+            print()
+            ui.success("Installed successfully")
+            return True
+        
+        print()
+        ui.warning("Pre-built wheel failed, trying source build...")
+        ui.info("(This can take 5-10 minutes)")
+        print()
+        
+        result = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "llama-cpp-python"]
+        )
+        
+        if result.returncode == 0:
+            print()
+            ui.success("Installed successfully (built from source)")
+            return True
+        else:
+            print()
+            ui.error("Installation failed")
+            return False
+            
+    except Exception as e:
+        ui.error(f"Installation failed: {e}")
+        return False
 
 CONFIG_DIR = Path.home() / ".hermit"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 
 DEFAULT_CONFIG = {
     # LLM settings
+    "llm_backend": "openai",
+
+    # OpenAI settings
     "openai_key": None,
     "openai_model": "gpt-4o-mini",
+
+    # llama.cpp settings
+    "llamacpp_model_path": None,
+    "llamacpp_n_ctx": 4096,
+    "llamacpp_n_gpu_layers": -1,  # -1 = all layers on GPU, 0 = CPU only
+
+    # Setup flags
     "setup_complete": False,
+    "openai_configured": False,
+    "llamacpp_configured": False,
 
     # Directory mappings (host -> sandbox)
     "allowed_directories": [
@@ -47,6 +114,25 @@ DEFAULT_CONFIG = {
         "timeout_seconds": 60,
     }
 }
+
+RECOMMENDED_MODELS = [
+    {
+        "name": "Qwen2.5-Coder-3B-Instruct",
+        "filename": "qwen2.5-coder-3b-instruct-q4_k_m.gguf",
+        "url": "https://huggingface.co/Qwen/Qwen2.5-Coder-3B-Instruct-GGUF/resolve/main/qwen2.5-coder-3b-instruct-q4_k_m.gguf",
+        "size_mb": 2000,
+        "ram_required": "4GB",    
+    },
+    {
+        "name": "Qwen2.5-Coder-7B-Instruct", 
+        "filename": "qwen2.5-coder-7b-instruct-q4_k_m.gguf",
+        "url": "https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct-GGUF/resolve/main/qwen2.5-coder-7b-instruct-q4_k_m.gguf",
+        "size_mb": 4700,
+        "ram_required": "8GB",
+    },
+]
+
+MODELS_DIR = CONFIG_DIR / "models"
 
 def load_config() -> dict:
     """Load config from disk, or return defaults."""
@@ -230,6 +316,44 @@ Config Display
 
 """
 
+def get_models_dir() -> Path:
+    """Get models directory, create if needed."""
+    MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    return MODELS_DIR
+
+def get_active_backend() -> str:
+    """Get currently active backend name."""
+    config = load_config()
+    return config.get("llm_backend", "openai")
+
+def set_active_backend(backend: str) -> bool:
+    """Switch active backend. Returns False if backend not configured."""
+    if backend not in ["openai", "llamacpp"]:
+        return False
+    
+    config = load_config()
+
+    if backend == "openai" and not config.get("openai_configured"):
+        return False
+    if backend == "llamacpp" and not config.get("llamacpp_configured"):
+        return False
+    
+    config["llm_backend"] = backend
+    save_config(config)
+    return True
+
+def get_available_backends() -> list:
+    """Return list of configured backends."""
+    config = load_config()
+    available = []
+
+    if config.get("openai_configured"):
+        available.append("openai")
+    if config.get("llamacpp_configured"):
+        available.append("llamacpp")
+
+    return available
+
 def show_config():
     """Display current configuration in a readable format."""
     config = load_config()
@@ -238,12 +362,32 @@ def show_config():
     print("  HERMIT CONFIGURATION")
     print("=" * 50)
 
-    # LLM Settings
-    print("\n[LLM Settings]")
-    key = config.get('openai_key', '')
-    masked = key[:7] + '...' + key[-4:] if key and len(key) > 15 else '(not set)'
-    print(f"  OpenAI Key: {masked}")
-    print(f"  Model: {config.get('openai_model', 'gpt-4o-mini')}")
+    print("\n[LLM Backend]")
+    backend = config.get("llm_backend", "openai")
+    print(f"  Active: {backend}")
+    available = get_available_backends()
+    print(f"  Available: {', '.join(available) if available else 'none'}")
+
+    # OpenAI setting
+    print("\n[OpenAI]")
+    if config.get("openai_configured"):
+        key = config.get('openai_key', '')
+        masked = key[:7] + '...' + key[-4:] if key and len(key) > 15 else '(not set)'
+        print(f"  Configured")
+        print(f"  Key: {masked}")
+        print(f"  Model: {config.get('openai_model', 'gpt-4o-mini')}")
+    else:
+        print(f"  Not configured")
+
+    # llamacpp
+    print("\n[llama.cpp]")
+    if config.get("llamacpp_configured"):
+        model_path = config.get('llamacpp_model_path', '')
+        model_name = Path(model_path).name if model_path else '(not set)'
+        print(f"  ✓ Configured")
+        print(f"  Model: {model_name}")
+    else:
+        print(f"  ✗ Not configured")
 
     # Directories
     print("\n[Allowed Directories]")
@@ -288,27 +432,156 @@ def first_run_setup() -> dict:
     ui.print_banner()
     print(f"  {ui.bold('First Time Setup')}")
     print()
-    print(f"  Get your API key from: {ui.dim('https://platform.openai.com/api-keys')}")
-    print()
 
     config = load_config()
 
-    while True:
-        key = input(f"  OpenAI API key: ").strip()
-        if key.startswith("sk-") and len(key) > 20:
-            break
-        ui.error("Invalid key format. Should start with 'sk-'")
+    # Ask which backend(s) to configure
+    print("  Which LLM backend do you want to use?")
+    print()
+    print("    1. OpenAI (online, needs API key)")
+    print("    2. llama.cpp (offline, runs locally)")
+    print("    3. Both")
+    print()
 
-    config["openai_key"] = key
+    while True:
+        choice = input("  Select (1-3): ").strip()
+        if choice in ['1', '2', '3']:
+            break
+        print("  Please enter 1, 2, or 3")
+
+    if choice in ['1', '3']:
+        print()
+        print(f"  Get your API key from: {ui.dim('https://platform.openai.com/api-keys')}")
+        print()
+
+        while True:
+            key = input("  OpenAI API key: ").strip()
+            if key.startswith("sk-") and len(key) > 20:
+                break
+            if not key and choice == '3':
+                print("  Skipping OpenAI...")
+                break
+            ui.error("Invalid key format. Should start with 'sk-'")
+        
+        if key:
+            config["openai_key"] = key
+            config["openai_configured"] = True
+            ui.success("OpenAI configured")
+        
+    if choice in ['3', '2']:
+        print()
+        print(f"  {ui.bold('llama.cpp Setup (Offline Mode)')}")
+        print()
+
+        if _check_llamacpp_installed():
+            ui.success("llama-cpp-python is installed")
+        else:
+            print("  llama-cpp-python not found.")
+            install = input("  Install it now? (Y/n): ").strip().lower()
+
+            if install in ('', 'y', 'yes'):
+                if not _install_llamacpp():
+                    print()
+                    print("  You can install manually later:")
+                    print("    pip install llama-cpp-python")
+                    print()
+                    if choice == '2':
+                        print("  Setup incomplete. Run 'hermit' again after installing.")
+                        return config
+                    else:
+                        print("  Continuing with OpenAI only...")
+                        config["llm_backend"] = "openai"
+                        config["setup_complete"] = True
+                        save_config(config)
+                        return config
+            else:
+                print()
+                print("  Skipping llama.cpp setup.")
+                if choice == '2':
+                    print("  Run 'hermit' again after installing llama-cpp-python.")
+                    return config
+                else:
+                    config["llm_backend"] = "openai"
+        
+        print()
+        print("  Available models:")
+        for i, m in enumerate(RECOMMENDED_MODELS, 1):
+            print(f"    {i}. {m['name']} (~{m['size_mb']}MB, needs {m['ram_required']})")
+        print(f"    {len(RECOMMENDED_MODELS)+1}. Custom path")
+        print()
+
+        while True:
+            model_choice = input(f"  Select (1-{len(RECOMMENDED_MODELS)+1}): ").strip()
+            try:
+                idx = int(model_choice)
+                if 1 <= idx <= len(RECOMMENDED_MODELS):
+                    # Download model
+                    model_info = RECOMMENDED_MODELS[idx-1]
+                    model_path = _download_model(model_info)
+                    if model_path:
+                        config["llamacpp_model_path"] = model_path
+                        config["llamacpp_configured"] = True
+                    break
+                elif idx == len(RECOMMENDED_MODELS) + 1:
+                    path = input("  Path to .gguf file: ").strip()
+                    if Path(path).exists():
+                        config["llamacpp_model_path"] = path
+                        config["llamacpp_configured"] = True
+                        break
+                    ui.error("File not found")
+            except ValueError:
+                pass
+
+    
+    if config.get("openai_configured") and config.get("llamacpp_configured"):
+        print()
+        default = input("  Default backend? (1=OpenAI, 2=llama.cpp) [1]: ").strip()
+        config["llm_backend"] = "llamacpp" if default == "2" else "openai"
+    elif config.get("openai_configured"):
+        config["llm_backend"] = "openai"
+    elif config.get("llamacpp_configured"):
+        config["llm_backend"] = "llamacpp"
+ 
     config["setup_complete"] = True
     save_config(config)
-
+    
     print()
-    ui.success("OpenAI configured!")
-    ui.info(f"Config saved to {ui.dim('~/.hermit/config.json')}")
+    ui.success("Setup complete!")
+    ui.info(f"Config saved to {ui.dim(str(CONFIG_FILE))}")
     print()
+    
     return config
 
+def _download_model(model_info: dict) -> str:
+    """Download a model, return path."""
+    import urllib.request
+    import sys
+    from hermit import ui
+    
+    models_dir = get_models_dir()
+    model_path = models_dir / model_info["filename"]
+    
+    if model_path.exists():
+        ui.info(f"Model already downloaded: {model_info['filename']}")
+        return str(model_path)
+    
+    ui.info(f"Downloading {model_info['name']} (~{model_info['size_mb']}MB)...")
+    print()
+    
+    def progress(block_num, block_size, total_size):
+        current = block_num * block_size
+        ui.download_progress(current, total_size)
+    
+    try:
+        urllib.request.urlretrieve(model_info["url"], model_path, progress)
+        print()  # Newline after progress bar
+        ui.success(f"Downloaded to {model_path}")
+        return str(model_path)
+    except Exception as e:
+        print()
+        ui.error(f"Download failed: {e}")
+        return None
+    
 def ensure_setup() -> dict:
     """Make sure setup is complete. Returns config."""
     config = load_config()
