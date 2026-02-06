@@ -5,13 +5,16 @@ import os
 import subprocess
 import sys
 import signal
+import json
 from hermit.policy import check_command, RiskLevel
 from hermit.actions import parse_action
 from hermit.mounts import setup_mounts, cleanup_mounts
 from hermit.llm_backend import create_backend, LLMBackend
-from hermit.config import load_config, get_preference, get_cgroup_config, set_active_backend
+from hermit.config import load_config, save_config, get_preference, get_cgroup_config, set_active_backend
 from hermit.config import ensure_setup, config_cli, get_preference, get_cgroup_config
 from hermit.cgroups import setup_cgroup, cleanup_cgroup
+from hermit.planner import system_prompt, parse_plan
+from hermit.executor import execute_plan
 from hermit import audit
 from hermit import ui
 
@@ -46,37 +49,6 @@ def ensure_sandbox():
     run_setup()
     return True
 
-SYSTEM_PROMPT = """You are Hermit, a secure shell assistant. Convert user requests to structured actions.
-
-IMPORTANT: Return exactly ONE JSON object per response. No explanation, no markdown.
-
-The user's files are mounted at:
-- /workspace/downloads (their Downloads folder)
-- /workspace/projects (their projects folder)
-
-Available actions:
-
-{"action": "list_files", "path": "/workspace/downloads", "all": false, "long": false}
-{"action": "read_file", "path": "filename"}
-{"action": "create_file", "path": "filename", "content": "text"}
-{"action": "delete_files", "path": ".", "pattern": "*.log", "recursive": false}
-{"action": "move_file", "source": "old", "destination": "new"}
-{"action": "create_directory", "path": "dirname"}
-{"action": "find_files", "path": ".", "pattern": "*.py", "file_type": "file"}
-{"action": "organize_by_type", "path": "/workspace/downloads"}
-{"action": "run_command", "command": "echo hello"}
-
-For BATCH operations (creating/deleting multiple files), use run_command with brace expansion:
-- Create 10 files: {"action": "run_command", "command": "touch /workspace/projects/file{1..10}.py"}
-- Delete all .tmp: {"action": "delete_files", "path": "/workspace/downloads", "pattern": "*.tmp"}
-
-Examples:
-User: "show my downloads" → {"action": "list_files", "path": "/workspace/downloads", "all": true, "long": true}
-User: "create 5 test files" → {"action": "run_command", "command": "touch /workspace/projects/test{1..5}.txt"}
-User: "organize downloads by type" → {"action": "organize_by_type", "path": "/workspace/downloads"}
-"""
-
-# Global for cleanup on exit
 mounted_paths = []
 cleanup_done = False
 llm_backend: LLMBackend = None
@@ -107,7 +79,7 @@ def init_llm_backend():
 def get_action(user_input: str) -> str:
     """Ask LLM to return a structured JSON action."""
     global llm_backend
-    return llm_backend.get_completion(SYSTEM_PROMPT, user_input)
+    return llm_backend.get_completion(system_prompt(), user_input)
 
 
 def execute_unsafe(command: str) -> str:
@@ -120,8 +92,6 @@ def execute_sandboxed(command: str) -> str:
     cgroup_cfg = get_cgroup_config()
     timeout = cgroup_cfg.get('timeout_seconds', 30)
 
-    # Use bash wrapper to add process to cgroup BEFORE running unshare
-    # This ensures the unshare process and all children are in the cgroup
     cgroup_path = "/sys/fs/cgroup/hermit-sandbox"
     wrapper_command = f'''
         echo $$ > {cgroup_path}/cgroup.procs
@@ -158,6 +128,26 @@ def cleanup_handler(signum, frame):
         cleanup_done = True
     print("  Goodbye!")
     sys.exit(0)
+
+def show_plan_preview(plan):
+    """Display a multi-step plan for user review."""
+    print()
+    ui.info(f"Plan: {plan.description}")
+    print(f"  {ui.dim(f'{len(plan)} steps:')}")
+    print()
+    for i, step in enumerate(plan.steps):
+        deps = ""
+        if step.depends_on:
+            deps = ui.dim(f" (after step {', '.join(str(d) for d in step.depends_on)})")
+        print(f"    {i + 1}. {step.description}{deps}")
+    print()
+
+def get_user_approval(risk_level: str) -> bool:
+    """Approval callback for the executor."""
+    if risk_level == "high":
+        confirm = input(f"\n  Type '{ui.orange('yes')}' to confirm: ")
+        return confirm.lower() == "yes"
+    return True
 
 
 def show_help():
@@ -247,6 +237,8 @@ def main():
     print(f"  Ready. Type {ui.dim('help')} for commands.")
     ui.separator()
 
+    exec_fn = execute_sandboxed if sandboxed else execute_unsafe
+
     try:
         while True:
             user_input = ui.prompt()
@@ -278,71 +270,106 @@ def main():
                 args = user_input.split()[1:] if len(user_input.split()) > 1 else []
 
                 if len(args) >= 2 and args[0] == "backend":
-                    if set_active_backend(args[1]):
+                    backend_name = args[1]
+                    if set_active_backend(backend_name):
                         init_llm_backend()
-                        print(f"  ✓ Switched to {llm_backend.get_name()}")
+                        print(f"  {ui.green(ui.CHECK)} Switched to {llm_backend.get_name()}")
                     else:
-                        print(f"  ✗ Backend '{args[1]}' not configured")
-                    continue
-                
+                        # Actually help the user instead of dead-ending
+                        config = load_config()
+                        if backend_name == "openai" and not config.get("openai_configured"):
+                            print(f"  {ui.yellow(ui.WARN)} OpenAI not configured yet.\n")
+                            key = input(f"  Enter API key (from {ui.dim('platform.openai.com/api-keys')}): ").strip()
+                            if key.startswith("sk-") and len(key) > 20:
+                                config["openai_key"] = key
+                                config["openai_configured"] = True
+                                config["llm_backend"] = "openai"
+                                save_config(config)
+                                init_llm_backend()
+                                print(f"  {ui.green(ui.CHECK)} Switched to {llm_backend.get_name()}")
+                            elif key:
+                                ui.error("Invalid key format. Should start with 'sk-'")
+                            else:
+                                ui.info("Cancelled.")
+                        elif backend_name == "llamacpp" and not config.get("llamacpp_configured"):
+                            print(f"  {ui.yellow(ui.WARN)} llama.cpp not configured yet.")
+                            print(f"  Run {ui.dim('hermit')} without sudo to re-run setup.")
+                        else:
+                            ui.error(f"Unknown backend '{backend_name}'. Options: openai, llamacpp")
+                    continue                
                 config_cli(args)
                 continue
 
             # Get action from LLM with spinner
-            spinner = ui.Spinner("Thinking")
+            spinner = ui.Spinner()
             spinner.start()
             try:
-                action = parse_action(get_action(user_input))
+                raw_plan = llm_backend.get_completion(system_prompt(), user_input)
+                plan = parse_plan(raw_plan)
+            except Exception as e:
+                spinner.stop()
+                ui.error(f"Failed to parse plan: {e}")
+                print(f"  {ui.dim('Raw:')} {raw_plan}")
+                continue
             finally:
                 spinner.stop()
 
-            command = action.render()
+            audit.log_command(user_input, f"plan:{len(plan)} steps")
 
-            # Show what we're doing
-            ui.info(action.describe())
-            ui.command_box(command)
+            if len(plan) == 1:
+                # simple
+                step = plan.steps[0]
+                action = parse_action(json.dumps(step.action_json))
 
-            audit.log_command(user_input, command)
+                command = action.render()
 
-            policy = check_command(command)
-            audit.log_policy_check(command, policy.allowed, policy.risk.value, policy.reason)
+                ui.info(action.describe())
+                ui.command_box(command)
 
-            # Handle policy result
-            if not policy.allowed:
-                ui.risk_display("blocked", policy.reason)
-                audit.log_blocked(command, policy.reason)
-                continue
+                policy = check_command(command)
+                audit.log_policy_check(command, policy.allowed, policy.risk.value, policy.reason)
 
-            ui.risk_display(policy.risk.value, policy.reason)
-
-            if policy.risk == RiskLevel.HIGH:
-                confirm = input(f"\n  Type '{ui.orange('yes')}' to confirm: ")
-                if confirm.lower() != 'yes':
-                    ui.info("Cancelled.")
+                if not policy.allowed:
+                    ui.risk_display("blocked", policy.reason)
+                    audit.log_blocked(command, policy.reason)
                     continue
-            elif policy.risk == RiskLevel.MEDIUM:
-                confirm = input(f"  Run? ({ui.green('y')}/{ui.dim('n')}) ")
-                if confirm.lower() != 'y':
-                    ui.info("Cancelled.")
-                    continue
-            else:
-                if get_preference("confirm_before_execute"):
+                
+                ui.risk_display(policy.risk.value, policy.reason)
+                if policy.risk == RiskLevel.HIGH:
+                    confirm = input(f"\n  Type '{ui.orange('yes')}' to confirm: ")
+                    if confirm.lower() != 'yes':
+                        ui.info("Cancelled.")
+                        continue
+                elif policy.risk == RiskLevel.MEDIUM:
                     confirm = input(f"  Run? ({ui.green('y')}/{ui.dim('n')}) ")
                     if confirm.lower() != 'y':
                         ui.info("Cancelled.")
                         continue
+                else:
+                    if get_preference("confirm_before_execute"):
+                        confirm = input(f"  Run? ({ui.green('y')}/{ui.dim('n')}) ")
+                        if confirm.lower() != 'y':
+                            ui.info("Cancelled.")
+                            continue
 
-            # Execute
-            if sandboxed:
-                output = execute_sandboxed(command)
+                output = exec_fn(command)
+                audit.log_execution(command, output, sandboxed)
+                ui.success("Done")
+
+                if output and output.strip():
+                    print()
+                    print(ui.dim("  " + output.replace("\n", "\n  ")))
+
             else:
-                output = execute_unsafe(command)
+                show_plan_preview(plan)
+                confirm = input(f"  Execute this plan? ({ui.green('y')}/{ui.dim('n')}) ").strip()
 
-            ui.success("Done")
-
-            if output and output.strip():
+                if confirm.lower() != "y":
+                    ui.info("Cancelled.")
+                    continue
+                    
                 print()
-                print(ui.dim("  " + output.replace("\n", "\n  ")))
+                execute_plan(plan, exec_fn, get_user_approval)
 
     finally:
         if sandboxed and mounted_paths and not cleanup_done:
