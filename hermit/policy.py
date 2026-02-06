@@ -44,8 +44,9 @@ MEDIUM_RISK_PATTERNS = [
     (r"cp\s+", "Copying files"),
     (r"mkdir", "Creating directories"),
     (r"touch", "Creating files"),
-    (r">\s*\w+", "Writing to file"),
-    (r">>\s*\w+", "Appending to file"),
+    (r"echo\s+.*>\s*\S+", "Writing to file"),
+    (r">\s*\S+", "Writing to file"),
+    (r">>\s*\S+", "Appending to file"),
 ]
 
 def get_blocked_patterns() -> list:

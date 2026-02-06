@@ -118,21 +118,41 @@ def download_progress(current: int, total: int, width: int = 40):
 class Spinner:
     """Animated spinner for thinking/loading states."""
 
-    def __init__(self, message: str = "Thinking"):
-        self.message = message
+    MESSAGES = [
+        "Thinking",
+        "Cooking up a plan",
+        "Pondering",
+        "Percolating",
+        "Ruminating",
+        "Plotting",
+        "Dreaming",
+        "Crawling",
+        "Building",
+        "Figuring it out"
+    ]
+
+    def __init__(self):
         self.running = False
         self.thread = None
         self.frame = 0
+        self.message_index = 0
 
     def _animate(self):
+        ticks = 0
         while self.running:
             frame = SPINNER_FRAMES[self.frame % len(SPINNER_FRAMES)]
-            sys.stdout.write(f"\r  {orange(frame)} {self.message}...")
+            msg = self.MESSAGES[self.message_index % len(self.MESSAGES)]
+            sys.stdout.write(f"\r\033[K {orange(frame)} {msg}...")
             sys.stdout.flush()
             self.frame += 1
+            ticks += 1
+
+            if ticks % 20 == 0:
+                self.message_index += 1
+
             time.sleep(0.1)
         # Clear the line
-        sys.stdout.write("\r" + " " * 40 + "\r")
+        sys.stdout.write("\r\033[K")
         sys.stdout.flush()
 
     def start(self):

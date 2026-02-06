@@ -50,7 +50,7 @@ class OpenAIBackend(LLMBackend):
         response = client.chat.completions.create(
             model=self.model,
             messages=messages,
-            max_tokens=512
+            max_tokens=2048
         )
         
         reply = response.choices[0].message.content.strip()
@@ -104,7 +104,7 @@ class LlamaCPPBackend(LLMBackend):
         
         response = llama.create_chat_completion(
             messages=messages,
-            max_tokens=512,
+            max_tokens=2048,
             temperature=0.1,
             response_format={
                 "type": "json_object"  # Forces valid JSON
