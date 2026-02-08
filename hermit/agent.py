@@ -76,12 +76,6 @@ def init_llm_backend():
     return llm_backend
 
 
-def get_action(user_input: str) -> str:
-    """Ask LLM to return a structured JSON action."""
-    global llm_backend
-    return llm_backend.get_completion(system_prompt(), user_input)
-
-
 def execute_unsafe(command: str) -> str:
     result = subprocess.run(command, shell=True, capture_output=True, text=True)
     return result.stdout + result.stderr
