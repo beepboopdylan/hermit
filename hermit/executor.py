@@ -93,7 +93,7 @@ def _looks_like_error(command: str, output: str) -> bool:
     ]
     return any(sig in output for sig in error_signals)
 
-def execute_plan(plan: Plan, execute_fn: Callable[[str], str], approve_fn: Callable[[str], bool],) -> list:
+def execute_plan(plan: Plan, execute_fn: Callable[[str], str], approve_fn: Callable[[str], bool], step_by_step: bool,) -> list:
     """
     Execute a plan step by step
     """
@@ -143,9 +143,9 @@ def execute_plan(plan: Plan, execute_fn: Callable[[str], str], approve_fn: Calla
         ui.info(step.description)
         ui.info(f"${command}")
 
-        if policy.risk == RiskLevel.HIGH:
-            ui.risk_display("high", policy.reason)
-            if not approve_fn("high"):
+        if step_by_step or policy.risk == RiskLevel.HIGH:
+            ui.risk_display(policy.risk.value, policy.reason)
+            if not approve_fn(policy.risk.value):
                 result = StepResult(
                     step_id=step.step_id, command=command, output="",
                     success=False, risk="high", skipped=True, error="User cancelled",

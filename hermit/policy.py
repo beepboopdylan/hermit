@@ -32,8 +32,8 @@ HIGH_RISK_PATTERNS = [
     (r"rm\s+-[rf]", "Recursive/forced delete"),
     (r"rm\s+.*\*", "Wildcard delete"),
     (r"mv\s+.*\s+/dev/null", "Moving files to /dev/null"),
-    (r"chmod\s+-R", "Recursive permission change"),
-    (r"chown\s+-R", "Recursive ownership change"),
+    (r"chmod\s+-[rR]", "Recursive permission change"),
+    (r"chown\s+-[rR]", "Recursive ownership change"),
     (r"find.*-delete", "Find with delete"),
     (r"find.*-exec.*rm", "Find with rm exec"),
 ]

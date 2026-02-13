@@ -47,12 +47,45 @@ def cleanup_mounts(mounted: list):
     for mount_point in mounted:
         subprocess.run(["umount", mount_point], capture_output=True)
 
-def list_mounts():
-    print("\nExposed folders:")
+
+def mount_dr(host_path: str, sandbox_path: str) -> str | None:
+    """Mount a single directory into the sandbox. Returns sandbox fullpath or None."""
+    host_full = os.path.expanduser(host_path)
+    sandbox_full = f"{SANDBOX_ROOT}{sandbox_path}"
+
+    if not os.path.exists(host_full):
+        ui.mount_status(host_path, sandbox_path, False)
+        return None
+
+    os.makedirs(sandbox_full, exist_ok=True)
+    res = subprocess.run(
+        ["mount", "--bind", host_full, sandbox_full],
+        capture_output=True
+    )
+
+    if res.returncode == 0:
+        ui.mount_status(host_path, sandbox_path, True)
+        return sandbox_full
+    else:
+        ui.mount_status(host_path, sandbox_path, False)
+        return None
+
+def unmount_dr(sandbox_path: str) -> bool:
+    sandbox_full = f"{SANDBOX_ROOT}{sandbox_path}"
+    res = subprocess.run(
+        ["umount", sandbox_full], 
+        capture_output=True
+    )
+    return res.returncode == 0
+
+def list_mounts(active_mounts: list):
+    """Show configured directories and their live mount status."""
+    print()
     for host_path, sandbox_path in get_mount_list():
-        host_full = os.path.expanduser(host_path)
-        #exists = "✅" if os.path.exists(host_full) else "❌"
-        print(f"   {host_path} → {sandbox_path}")
+        sandbox_full = f"{SANDBOX_ROOT}{sandbox_path}"
+        is_mounted = sandbox_full in active_mounts
+        status = ui.green("mounted") if is_mounted else ui.dim("not mounted")
+        print(f"   {host_path} → {sandbox_path}  [{status}]")
     print()
                 
 if __name__ == "__main__":

@@ -6,9 +6,10 @@ import subprocess
 import sys
 import signal
 import json
+from pathlib import Path
 from hermit.policy import check_command, RiskLevel
 from hermit.actions import parse_action
-from hermit.mounts import setup_mounts, cleanup_mounts
+from hermit.mounts import setup_mounts, cleanup_mounts, mount_dr, unmount_dr, list_mounts
 from hermit.llm_backend import create_backend, LLMBackend
 from hermit.config import load_config, save_config, get_preference, get_cgroup_config, set_active_backend
 from hermit.config import ensure_setup, config_cli, get_preference, get_cgroup_config
@@ -147,7 +148,8 @@ def get_user_approval(risk_level: str) -> bool:
     if risk_level == "high":
         confirm = input(f"\n  Type '{ui.orange('yes')}' to confirm: ")
         return confirm.lower() == "yes"
-    return True
+    confirm = input(f"  Run? ({ui.green('y')}/{ui.dim('n')}) ")
+    return confirm.lower() == 'y'
 
 
 def show_help():
@@ -169,6 +171,9 @@ def show_help():
     print(f"    config set <key> <val>      Set a preference")
     print(f"    config add-directory <path> Add folder to sandbox")
     print(f"    config remove-directory     Remove folder")
+    print(f"    mounts                      Show mounted folders")
+    print(f"    mount <path>                Add and mount a folder")
+    print(f"    unmount <path>              Unmount (this session)")
     print(f"    audit                       Show command history")
     print(f"    clear                       Clear conversation")
     print(f"    exit                        Quit hermit")
@@ -183,6 +188,9 @@ def show_inline_help():
     print(f"    {ui.dim('config show')}              Show configuration")
     print(f"    {ui.dim('config set <key> <val>')}   Set a preference")
     print(f"    {ui.dim('config add-directory')}     Add a folder to sandbox")
+    print(f"    {ui.dim('mounts')}                   Show mounted folders")
+    print(f"    {ui.dim('mount <path>')}             Add and mount a folder")
+    print(f"    {ui.dim('unmount <path>')}           Unmount a folder (this session)")
     print(f"    {ui.dim('audit')}                    Show command history")
     print(f"    {ui.dim('clear')}                    Clear conversation history")
     print(f"    {ui.dim('exit')}                     Quit hermit")
@@ -242,31 +250,76 @@ def main():
     try:
         while True:
             user_input = ui.prompt()
+            input = user_input.lower()
 
-            if user_input.lower() in ['exit', 'quit']:
+            if not input:
+                continue
+            
+            if input in ['exit', 'quit']:
                 break
 
-            if not user_input:
-                continue
-
-            if user_input.lower() in ['help', '?']:
+            if input in ['help', '?']:
                 show_inline_help()
                 continue
 
-            if user_input.lower() == 'audit':
+            if input == 'audit':
                 audit.show_recent(10)
                 continue
             
-            if user_input.lower() == 'clear':
+            if input == 'clear':
                 llm_backend.clear_history()
                 print("Conversation history cleared.")
                 continue
 
-            if user_input.lower() == 'tree':
+            if input == 'tree':
                 ui.print_tree(f"{SANDBOX_ROOT}/workspace")
                 continue
 
-            if user_input.lower().startswith('config'):
+            if input == "mounts":
+                list_mounts(mounted_paths)
+                continue
+
+            if input.startswith("mount "):
+                path = user_input.split(None, 1)[1].strip()
+                from hermit.config import add_directory, get_allowed_directories
+
+                if not os.path.exists(os.path.expanduser(path)):
+                    ui.error(f"Path does not exist: {path}")
+                    continue
+
+                if add_directory(path):
+                    ui.info(f"Added {path} to config")
+                
+                for d in get_allowed_directories():
+                    if d["host"] == path or d["host"] == path.replace(str(Path.home()), "~"):
+                        res = mount_dr(d["host"], d["sandbox"])
+                        if res:
+                            mounted_paths.append(res)
+                        break
+                else:
+                    ui.error(f"Could not find {path} in config")
+                continue
+            if input.startswith("unmount "):
+                path = user_input.split(None, 1)[1].strip()
+                from hermit.config import get_allowed_directories
+
+                for d in get_allowed_directories():
+                    if d["host"] == path or d["host"] == path.replace(str(Path.home()), "~"):
+                        sandbox_full = f"{SANDBOX_ROOT}{d['sandbox']}"
+                        if sandbox_full in mounted_paths:
+                            if unmount_dr(d["sandbox"]):
+                                mounted_paths.remove(sandbox_full)
+                                ui.success(f"Unmounted {path} (still in config for next session)")
+                            else:
+                                ui.error(f"Failed to unmount {path}")
+                        else:
+                            ui.info(f"{path} is not currently mounted")
+                        break
+                else:
+                    ui.error(f"{path} not found in config")
+                continue
+
+            if input.startswith('config'):
                 args = user_input.split()[1:] if len(user_input.split()) > 1 else []
 
                 if len(args) >= 2 and args[0] == "backend":
@@ -345,12 +398,6 @@ def main():
                     if confirm.lower() != 'y':
                         ui.info("Cancelled.")
                         continue
-                else:
-                    if get_preference("confirm_before_execute"):
-                        confirm = input(f"  Run? ({ui.green('y')}/{ui.dim('n')}) ")
-                        if confirm.lower() != 'y':
-                            ui.info("Cancelled.")
-                            continue
 
                 output = exec_fn(command)
                 audit.log_execution(command, output, sandboxed)
@@ -362,14 +409,21 @@ def main():
 
             else:
                 show_plan_preview(plan)
-                confirm = input(f"  Execute this plan? ({ui.green('y')}/{ui.dim('n')}) ").strip()
 
-                if confirm.lower() != "y":
+                print(f"    1. Step by step  2. Run all")
+                
+                choice = input(f"  Select (1/2/n): ")
+
+                if choice == "1":
+                    step_by_step = True
+                elif choice == "2":
+                    step_by_step = False
+                else:
                     ui.info("Cancelled.")
                     continue
-                    
+
                 print()
-                execute_plan(plan, exec_fn, get_user_approval)
+                execute_plan(plan, exec_fn, get_user_approval, step_by_step)
 
     finally:
         if sandboxed and mounted_paths and not cleanup_done:
