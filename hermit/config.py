@@ -72,6 +72,8 @@ DEFAULT_CONFIG = {
     "llamacpp_model_path": None,
     "llamacpp_n_ctx": 4096,
     "llamacpp_n_gpu_layers": -1,  # -1 = all layers on GPU, 0 = CPU only
+    "llamacpp_n_batch": 2048,     # Prompt processing batch size
+    "llamacpp_n_ubatch": 512,     # Generation microbatch size
 
     # Setup flags
     "setup_complete": False,

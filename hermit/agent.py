@@ -77,12 +77,6 @@ def init_llm_backend():
     return llm_backend
 
 
-def get_action(user_input: str) -> str:
-    """Ask LLM to return a structured JSON action."""
-    global llm_backend
-    return llm_backend.get_completion(system_prompt(), user_input)
-
-
 def execute_unsafe(command: str) -> str:
     result = subprocess.run(command, shell=True, capture_output=True, text=True)
     return result.stdout + result.stderr
@@ -254,32 +248,25 @@ def main():
 
             if not input:
                 continue
-            
-            if input in ['exit', 'quit']:
+            elif input in ['exit', 'quit']:
                 break
-
-            if input in ['help', '?']:
+            elif input in ['help', '?']:
                 show_inline_help()
                 continue
-
-            if input == 'audit':
+            elif input == 'audit':
                 audit.show_recent(10)
                 continue
-            
-            if input == 'clear':
+            elif input == 'clear':
                 llm_backend.clear_history()
                 print("Conversation history cleared.")
                 continue
-
-            if input == 'tree':
+            elif input == 'tree':
                 ui.print_tree(f"{SANDBOX_ROOT}/workspace")
                 continue
-
-            if input == "mounts":
+            elif input == "mounts":
                 list_mounts(mounted_paths)
                 continue
-
-            if input.startswith("mount "):
+            elif input.startswith("mount "):
                 path = user_input.split(None, 1)[1].strip()
                 from hermit.config import add_directory, get_allowed_directories
 
@@ -299,7 +286,7 @@ def main():
                 else:
                     ui.error(f"Could not find {path} in config")
                 continue
-            if input.startswith("unmount "):
+            elif input.startswith("unmount "):
                 path = user_input.split(None, 1)[1].strip()
                 from hermit.config import get_allowed_directories
 
@@ -318,8 +305,7 @@ def main():
                 else:
                     ui.error(f"{path} not found in config")
                 continue
-
-            if input.startswith('config'):
+            elif input.startswith('config'):
                 args = user_input.split()[1:] if len(user_input.split()) > 1 else []
 
                 if len(args) >= 2 and args[0] == "backend":

@@ -74,10 +74,13 @@ class OpenAIBackend(LLMBackend):
 
 class LlamaCPPBackend(LLMBackend):
     
-    def __init__(self, model_path: str, n_ctx: int = 4096, n_gpu_layers: int = -1):
+    def __init__(self, model_path: str, n_ctx: int = 4096, n_gpu_layers: int = -1,
+                 n_batch: int = 2048, n_ubatch: int = 512):
         self.model_path = model_path
         self.n_ctx = n_ctx
         self.n_gpu_layers = n_gpu_layers
+        self.n_batch = n_batch
+        self.n_ubatch = n_ubatch
         self._llm = None
         self.conversation_history = []
         self.max_history_turns = 10
@@ -90,6 +93,8 @@ class LlamaCPPBackend(LLMBackend):
                 model_path=self.model_path,
                 n_ctx=self.n_ctx,
                 n_gpu_layers=self.n_gpu_layers,
+                n_batch=self.n_batch,
+                n_ubatch=self.n_ubatch,
                 verbose=False  # Suppress llama.cpp logs
             )
         return self._llm
@@ -149,7 +154,9 @@ def create_backend(config: dict) -> LLMBackend:
         return LlamaCPPBackend(
             model_path=config.get("llamacpp_model_path", ""),
             n_ctx=config.get("llamacpp_n_ctx", 4096),
-            n_gpu_layers=config.get("llamacpp_n_gpu_layers", -1)
+            n_gpu_layers=config.get("llamacpp_n_gpu_layers", -1),
+            n_batch=config.get("llamacpp_n_batch", 2048),
+            n_ubatch=config.get("llamacpp_n_ubatch", 512),
         )
     else:
         raise ValueError(f"Unknown backend: {backend_type}")
