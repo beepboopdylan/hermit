@@ -182,27 +182,48 @@ def setup_etc_files(sandbox: Path):
     (etc / "nsswitch.conf").write_text("passwd: files\ngroup: files\nhosts: files\n")
 
 
-def setup_dev_nodes(sandbox: Path):
-    """Create basic device nodes (requires root)."""
+def setup_dev_mountpoints(sandbox: Path):
+    """Create empty files as bind mount targets for /dev nodes."""
     dev = sandbox / "dev"
+    dev.mkdir(exist_ok=True)
+    for name in ["null", "zero", "random", "urandom"]:
+        node = dev / name
+        if not node.exists():
+            node.touch()  # Empty file, will be overmounted at runtime
+            
 
-    nodes = [
-        ("null", 0o666, 1, 3),
-        ("zero", 0o666, 1, 5),
-        ("random", 0o666, 1, 8),
-        ("urandom", 0o666, 1, 9),
-    ]
+def setup_workspace_dirs(sandbox: Path):
+    """Create workspace mount point directories for user-configured directories."""
+    from hermit.config import get_allowed_directories
+    workspace = sandbox / "workspace"
+    workspace.mkdir(exist_ok=True)
+    for d in get_allowed_directories():
+        mount_point = sandbox / d["sandbox"].lstrip("/")
+        mount_point.mkdir(parents=True, exist_ok=True)
 
-    for name, mode, major, minor in nodes:
-        node_path = dev / name
-        if not node_path.exists():
-            try:
-                os.mknod(node_path, mode | 0o020000, os.makedev(major, minor))
-                print(f"  ✓ /dev/{name}")
-            except PermissionError:
-                print(f"  ✗ /dev/{name} (need root)")
-            except FileExistsError:
-                pass
+
+def enable_user_namespaces():
+    """Enable unprivileged user namespaces (needed for rootless sandbox)."""
+    sysctl_key = "kernel.apparmor_restrict_unprivileged_userns"
+    # Check current value
+    result = subprocess.run(
+        ["sysctl", "-n", sysctl_key],
+        capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        return  # sysctl doesn't exist on this kernel, nothing to do
+
+    if result.stdout.strip() == "0":
+        return  # Already enabled
+
+    # Set it now
+    subprocess.run(
+        ["sysctl", "-w", f"{sysctl_key}=0"],
+        capture_output=True, check=True
+    )
+    # Make it persistent across reboots
+    conf = Path("/etc/sysctl.d/99-hermit-userns.conf")
+    conf.write_text(f"{sysctl_key}=0\n")
 
 
 def copy_sandbox_scripts(sandbox: Path):
@@ -238,7 +259,7 @@ def run_step(message: str, func, *args):
     import io
     import sys
 
-    spinner = ui.Spinner(message)
+    spinner = ui.Spinner()
     spinner.start()
 
     # Suppress prints during execution
@@ -278,7 +299,7 @@ def main():
     import io
     import sys
 
-    spinner = ui.Spinner("Copying binaries")
+    spinner = ui.Spinner()
     spinner.start()
     old_stdout = sys.stdout
     sys.stdout = io.StringIO()
@@ -294,11 +315,14 @@ def main():
     run_step("Copying pyseccomp", copy_pyseccomp, SANDBOX_ROOT)
     run_step("Creating symlinks", create_python_symlink, SANDBOX_ROOT)
     run_step("Setting up /etc", setup_etc_files, SANDBOX_ROOT)
-    run_step("Creating /dev nodes", setup_dev_nodes, SANDBOX_ROOT)
+    run_step("Creating /dev mount points", setup_dev_mountpoints, SANDBOX_ROOT)
     run_step("Copying sandbox scripts", copy_sandbox_scripts, SANDBOX_ROOT)
+    run_step("Creating workspace mount points", setup_workspace_dirs, SANDBOX_ROOT)
+    run_step("Enabling user namespaces", enable_user_namespaces)
 
     print(f"""
   {ui.green(ui.CHECK)} {ui.bold('Sandbox ready!')}
+  {ui.dim('You can now run hermit without sudo.')}
 """)
 
 

@@ -90,7 +90,7 @@ class MainScreen(Screen):
         backend_val = f"OpenAI ({cfg.get('openai_model','gpt-4o-mini')})" if backend == "openai" else "llama.cpp"
 
         directories = get_allowed_directories()
-        fold_val = f"{len(directories)} mounted"
+        fold_val = f"{len(directories)} configured"
 
         cg = get_cgroup_config()
         res_val = f"{cg.get('memory_max_mb',512)}MB, {cg.get('cpu_quota_percent',50)}% CPU"
@@ -460,19 +460,19 @@ class FoldersScreen(Screen):
             path = input("  Host path (e.g. ~/Music): ").strip()
             if not path:
                 return
-            from hermit.config import add_directory, remove_directory
-            from hermit.mounts import mount_dr
+            from hermit.config import add_directory
+            import os
+            expanded = os.path.expanduser(path)
+            if not os.path.exists(expanded):
+                print(f"  ✗ Path not found: {expanded}")
+                return
             sandbox_name = self._unique_sandbox_name(path)
             if add_directory(path, sandbox_name):
                 state["config"] = load_config()
-                result = mount_dr(path, f"/workspace/{sandbox_name}")
-                if result:
-                    state["mounted_paths"].append(result)
-                else:
-                    # mount failed — roll back config entry
-                    remove_directory(path)
-                    state["config"] = load_config()
-                    print("  ✗ Mount failed — check that the path exists")
+                # Ensure mount point exists in sandbox
+                mount_point = f"{SANDBOX_ROOT}/workspace/{sandbox_name}"
+                os.makedirs(mount_point, exist_ok=True)
+                print(f"  ✓ Added {path} → /workspace/{sandbox_name}")
             else:
                 print("  ✗ Already added")
         run_in_terminal(_edit)
@@ -487,12 +487,6 @@ class FoldersScreen(Screen):
             confirm = input(f"  Delete {d['host']}? (y/N): ").strip().lower()
             if confirm == "y":
                 from hermit.config import remove_directory
-                from hermit.mounts import unmount_dr
-                unmount_dr(d["sandbox"])
-                # remove from mounted_paths
-                sandbox_full = f"{SANDBOX_ROOT}{d['sandbox']}"
-                if sandbox_full in state["mounted_paths"]:
-                    state["mounted_paths"].remove(sandbox_full)
                 remove_directory(d["host"])
                 state["config"] = load_config()
                 state["cursor"] = max(0, state["cursor"] - 1)
