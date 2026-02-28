@@ -2,7 +2,22 @@ import json
 import os
 from pathlib import Path
 import subprocess
-import sys 
+import sys
+
+
+def expand_user_path(path: str) -> str:
+    """Expand ~ to the real user's home, even under sudo."""
+    if not path.startswith("~"):
+        return os.path.expanduser(path)
+    sudo_user = os.environ.get("SUDO_USER")
+    if sudo_user:
+        import pwd
+        try:
+            home = pwd.getpwnam(sudo_user).pw_dir
+            return path.replace("~", home, 1)
+        except KeyError:
+            pass
+    return os.path.expanduser(path)
 
 def _check_llamacpp_installed() -> bool:
     """Check if llama-cpp-python is installed."""
@@ -178,13 +193,14 @@ def add_directory(host_path: str, sandbox_name: str = None) -> bool:
     if host_path.startswith("~"):
         display_path = host_path
     else:
-        display_path = str(Path(host_path).expanduser())
-        if display_path.startswith(str(Path.home())):
-            display_path = "~" + display_path[len(str(Path.home())):]
+        display_path = expand_user_path(host_path)
+        real_home = expand_user_path("~")
+        if display_path.startswith(real_home):
+            display_path = "~" + display_path[len(real_home):]
 
     # Generate sandbox path if not provided
     if sandbox_name is None:
-        folder_name = Path(host_path).expanduser().name.lower()
+        folder_name = Path(expand_user_path(host_path)).name.lower()
         sandbox_name = folder_name
 
     sandbox_path = f"/workspace/{sandbox_name}"
@@ -208,9 +224,10 @@ def remove_directory(host_path: str) -> bool:
 
     # Normalize for comparison
     if not host_path.startswith("~"):
-        expanded = str(Path(host_path).expanduser())
-        if expanded.startswith(str(Path.home())):
-            host_path = "~" + expanded[len(str(Path.home())):]
+        expanded = expand_user_path(host_path)
+        real_home = expand_user_path("~")
+        if expanded.startswith(real_home):
+            host_path = "~" + expanded[len(real_home):]
 
     original_len = len(dirs)
     config["allowed_directories"] = [d for d in dirs if d["host"] != host_path]
@@ -396,7 +413,7 @@ def show_config():
     for d in config.get("allowed_directories", []):
         host = d["host"]
         sandbox = d["sandbox"]
-        expanded = str(Path(host).expanduser())
+        expanded = expand_user_path(host)
         exists = "✓" if Path(expanded).exists() else "✗"
         print(f"  {exists} {host} → {sandbox}")
 
@@ -646,7 +663,7 @@ def config_cli(args: list) -> bool:
         sandbox_name = args[2] if len(args) > 2 else None
 
         if add_directory(host_path, sandbox_name):
-            sandbox_path = f"/workspace/{sandbox_name or Path(host_path).expanduser().name.lower()}"
+            sandbox_path = f"/workspace/{sandbox_name or Path(expand_user_path(host_path)).name.lower()}"
             print(f"✓ Added: {host_path} → {sandbox_path}")
         else:
             print(f"✗ Directory already exists or invalid path")

@@ -91,11 +91,17 @@ class MoveFile(Action):
     action: str = "move_file"
     source: str = ""
     destination: str = ""
-    
+
     def render(self) -> str:
+        if '\n' in self.source:
+            files = [f for f in self.source.strip().split('\n') if f.strip()]
+            return f"mv {' '.join(files)} {self.destination}"
         return f"mv {self.source} {self.destination}"
-    
+
     def describe(self) -> str:
+        if '\n' in self.source:
+            count = len([f for f in self.source.strip().split('\n') if f.strip()])
+            return f"Move {count} files to {self.destination}"
         return f"Move {self.source} to {self.destination}"
 
 @dataclass
@@ -106,12 +112,16 @@ class OrganizeByType(Action):
     def render(self) -> str:
         # Proper logic that doesn't move folders into each other
         return f"""cd {self.path} && 
-mkdir -p images documents audio video archives other &&
-for f in *.jpg *.jpeg *.png *.gif *.webp; do [ -f "$f" ] && mv "$f" images/; done 2>/dev/null;
-for f in *.pdf *.doc *.docx *.txt *.md; do [ -f "$f" ] && mv "$f" documents/; done 2>/dev/null;
-for f in *.mp3 *.wav *.flac; do [ -f "$f" ] && mv "$f" audio/; done 2>/dev/null;
-for f in *.mp4 *.mov *.avi; do [ -f "$f" ] && mv "$f" video/; done 2>/dev/null;
-for f in *.zip *.tar *.gz; do [ -f "$f" ] && mv "$f" archives/; done 2>/dev/null;
+mkdir -p images documents audio video archives spreadsheets installers other &&
+for f in *.jpg *.jpeg *.png *.gif *.webp *.svg *.bmp; do [ -f "$f" ] && mv "$f" images/; done 2>/dev/null;
+for f in *.pdf *.doc *.docx *.txt *.md *.rtf; do [ -f "$f" ] && mv "$f" documents/; done 2>/dev/null;
+for f in *.mp3 *.wav *.flac *.aac *.ogg; do [ -f "$f" ] && mv "$f" audio/; done 2>/dev/null;
+for f in *.mp4 *.mov *.avi *.mkv *.webm; do [ -f "$f" ] && mv "$f" video/; done 2>/dev/null;
+for f in *.zip *.tar *.gz *.rar *.7z; do [ -f "$f" ] && mv "$f" archives/; done 2>/dev/null;
+for f in *.csv *.xlsx *.xls *.numbers; do [ -f "$f" ] && mv "$f" spreadsheets/; done 2>/dev/null;
+for f in *.dmg *.pkg *.deb *.rpm *.exe; do [ -f "$f" ] && mv "$f" installers/; done 2>/dev/null;
+for f in *.pages *.key *.ppt *.pptx; do [ -f "$f" ] && mv "$f" documents/; done 2>/dev/null;
+for f in *.*; do [ -f "$f" ] && mv "$f" other/; done 2>/dev/null;
 true"""
     
     def describe(self) -> str:

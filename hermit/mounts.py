@@ -1,7 +1,7 @@
 import os
 import subprocess
 from pathlib import Path
-from hermit.config import get_allowed_directories
+from hermit.config import get_allowed_directories, expand_user_path
 from hermit import ui
 
 SANDBOX_ROOT = "/home/ubuntu/sandbox-root"
@@ -18,7 +18,7 @@ def setup_mounts():
     mounted = []
 
     for host_path, sandbox_path in get_mount_list():
-        host_full = os.path.expanduser(host_path)
+        host_full = expand_user_path(host_path)
         sandbox_full = f"{SANDBOX_ROOT}{sandbox_path}"
 
         if not os.path.exists(host_full):
@@ -50,7 +50,7 @@ def cleanup_mounts(mounted: list):
 
 def mount_dr(host_path: str, sandbox_path: str) -> str | None:
     """Mount a single directory into the sandbox. Returns sandbox fullpath or None."""
-    host_full = os.path.expanduser(host_path)
+    host_full = expand_user_path(host_path)
     sandbox_full = f"{SANDBOX_ROOT}{sandbox_path}"
 
     if not os.path.exists(host_full):

@@ -43,10 +43,14 @@ class ExecutionContext:
             self.variables[f"$STEP{step_id}"] = result.output.strip()
 
     def substitute(self, text: str) -> str:
-        """Replace $STEP{n} placeholders with actual outputs."""
+        """Replace $STEP{n} placeholders with actual outputs.
+
+        Values are escaped for JSON embedding since the text is a JSON string.
+        """
         res = text
         for var, val in self.variables.items():
-            res = res.replace(var, val)
+            escaped = val.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n').replace('\t', '\\t')
+            res = res.replace(var, escaped)
 
         return res
     
