@@ -7,7 +7,7 @@ Hermit is an agentic terminal assistant. Describe what you want in natural langu
 Can be used fully offline with local LLMs via llama.cpp, or online with OpenAI.
 
 ```
-$ sudo hermit
+$ hermit
 
        __
       (  )_
@@ -20,11 +20,7 @@ $ sudo hermit
   ● Sandbox active
   ● LLM: llama.cpp/OpenAI
 
-  Mounting folders...
-    ~/Downloads → /workspace/downloads ✓
-    ~/projects → /workspace/projects ✓
-
-  Ready. Type help for commands.
+  Ready. Type help for commands, or settings to configure.
 
 hermit> find all log files in projects and delete them
 
@@ -35,7 +31,8 @@ hermit> find all log files in projects and delete them
     2. Read list of found files (after step 1)
     3. Delete .log files in /workspace/projects (after step 1)
 
-  Execute this plan? (y/n) y
+    1. Step by step  2. Run all
+  Select (1/2/n): 2
 
   Find .log files in /workspace/projects
   $ find /workspace/projects -name "*.log" -type f
@@ -89,21 +86,28 @@ git clone https://github.com/beepboopdylan/hermit.git
 cd hermit
 pip install -e .
 
-# First run sets up the sandbox automatically
-sudo hermit
+# One-time setup (requires sudo)
+sudo hermit-setup
+
+# Run hermit (no sudo needed!)
+hermit
 ```
 
 Or install from GitHub directly:
 
 ```bash
 pip install git+https://github.com/beepboopdylan/hermit.git
-sudo hermit
+sudo hermit-setup
+hermit
 ```
 
-On first run, Hermit will:
-1. Build the chroot environment (copy binaries, libraries, device nodes)
-2. Ask you to choose an LLM backend (OpenAI or llama.cpp)
-3. Configure allowed directories to mount into the sandbox
+`hermit-setup` is a one-time step that:
+1. Builds the chroot environment (copies binaries, libraries, creates mount points)
+2. Enables unprivileged user namespaces (configures AppArmor sysctl)
+
+After that, `hermit` runs without sudo. On first run it will:
+1. Ask you to choose an LLM backend (OpenAI or llama.cpp)
+2. Let you configure allowed directories via the `settings` command
 
 ### For offline use (llama.cpp)
 
@@ -120,7 +124,7 @@ Note: local models like llama.cpp will respond more slowly than OpenAI. The trad
 
 ```bash
 # Sandboxed mode (default, recommended)
-sudo hermit
+hermit
 
 # Without sandbox (for development/testing only)
 hermit --unsafe
@@ -266,14 +270,14 @@ Hermit uses defense in depth — six independent layers, each covering different
 │  Layer 3: Policy Engine                            │
 │  Regex pattern matching blocks dangerous commands  │
 ├───────────────────────────────────────────────────┤
-│  Layer 4: chroot + Namespaces                      │
-│  Filesystem and PID isolation from host            │
+│  Layer 4: User NS + chroot + Namespaces             │
+│  Rootless filesystem and PID isolation from host   │
 ├───────────────────────────────────────────────────┤
 │  Layer 5: seccomp Filter                           │
 │  Kernel blocks dangerous syscalls                  │
 ├───────────────────────────────────────────────────┤
-│  Layer 6: cgroups                                  │
-│  Resource limits prevent DoS                       │
+│  Layer 6: systemd-run Resource Limits              │
+│  Per-command cgroup constraints prevent DoS        │
 ├───────────────────────────────────────────────────┤
 │  Audit Log: everything recorded                    │
 └───────────────────────────────────────────────────┘
@@ -300,21 +304,23 @@ Every rendered command is checked against pattern-based rules before execution:
 
 18 blocked patterns, 7 high-risk patterns, 8 medium-risk patterns.
 
-### Layer 4: chroot + Linux Namespaces
+### Layer 4: chroot + Linux Namespaces (rootless)
 
-Commands run in a chroot jail at `~/sandbox-root` with separate mount and PID namespaces:
+Commands run in a chroot jail at `~/sandbox-root` using unprivileged user namespaces — no root required at runtime:
 
 ```bash
-unshare --mount --pid --fork --mount-proc \
+unshare --user --map-root-user --mount --pid --fork \
     chroot ~/sandbox-root \
     /usr/bin/python3 /sandbox/sandbox_wrapper.py '<command>'
 ```
 
+- **User namespace** (`--user --map-root-user`) — provides "fake root" inside the sandbox while remaining unprivileged on the host. This is what eliminates the need for `sudo`.
 - **chroot** — process can only see the sandbox filesystem
 - **Mount namespace** — isolated filesystem view, independent of host
 - **PID namespace** — process can't see or signal host processes
+- **Clean environment** — only `PATH`, `HOME`, and `LANG` are passed into the sandbox. API keys, tokens, and other sensitive environment variables are never exposed.
 
-User directories are bind-mounted into `/workspace/` for controlled access.
+User directories are bind-mounted into `/workspace/` inside the namespace for controlled access. Mounts are transient — they exist only for the lifetime of each command and are automatically cleaned up by the kernel when the namespace exits.
 
 ### Layer 5: seccomp Filtering
 
@@ -324,9 +330,15 @@ A kernel-level syscall filter applied before command execution:
 - **Returns EPERM**: `socket`, `connect`, `bind`, `listen`, `accept` (no networking)
 - **Allowed**: `read`, `write`, `open`, `stat`, `mmap`, `brk`, `exit`, and other safe syscalls
 
-### Layer 6: cgroups
+### Layer 6: Resource Limits (systemd-run)
 
-Resource limits prevent runaway processes:
+Resource limits are enforced per-command using `systemd-run --user --scope`, which creates a transient systemd scope with cgroup constraints — no root required:
+
+```bash
+systemd-run --user --scope \
+    -p MemoryMax=512M -p CPUQuota=50% -p TasksMax=100 \
+    -- unshare ...
+```
 
 | Resource | Default Limit |
 |----------|---------------|
@@ -373,7 +385,9 @@ This opens a full-screen settings page where you can navigate with arrow keys an
 | `require_confirmation_for_delete` | `true` | Elevate delete operations to high risk |
 | `max_files_per_operation` | `100` | Limit bulk file operations |
 
-### cgroup Limits
+### Resource Limits
+
+Enforced per-command via `systemd-run --user`. Configurable in settings:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
@@ -384,7 +398,7 @@ This opens a full-screen settings page where you can navigate with arrow keys an
 
 ### Managing Directories
 
-Folders can be added and removed from the **Folders** screen in `settings`. You can also view currently mounted folders at any time:
+Folders can be added and removed from the **Folders** screen in `settings`. Configured directories are bind-mounted into `/workspace/` inside the sandbox at command execution time. You can view configured folders with:
 
 ```
 hermit> mounts
@@ -422,11 +436,11 @@ hermit/
 ├── policy.py            # Risk assessment and pattern matching
 ├── config.py            # Configuration management and setup wizard
 ├── settings_ui.py       # Interactive settings TUI (prompt_toolkit)
-├── mounts.py            # Bind-mount user directories into sandbox
-├── setup_sandbox.py     # Chroot environment initialization
+├── mounts.py            # Mount listing utilities
+├── setup_sandbox.py     # One-time chroot setup + user namespace enablement
 ├── sandbox_wrapper.py   # Runs inside chroot, applies seccomp filter
 ├── seccomp_filter.py    # Kernel-level syscall whitelist
-├── cgroups.py           # Resource limit enforcement
+├── cgroups.py           # Legacy cgroup helpers (resource limits now via systemd-run)
 ├── audit.py             # JSON event logging
 └── ui.py                # Terminal UI (colors, spinners, prompts)
 ```
@@ -445,13 +459,14 @@ Reference: [CaMeL: Design and Evaluation of a Prompt Injection Resistant LLM Age
 
 ### Why chroot + namespaces + seccomp (not Docker)?
 
-Docker is heavy and requires its own daemon. Hermit uses the same Linux primitives directly:
+Docker is heavy, requires its own daemon, and typically requires root or a docker group. Hermit uses the same Linux primitives directly, running rootless via user namespaces:
+- **User namespaces** enable unprivileged sandboxing (no sudo at runtime)
 - **chroot** isolates the filesystem
-- **Namespaces** isolate PIDs and mounts
+- **Mount/PID namespaces** isolate mounts and processes
 - **seccomp** filters syscalls at the kernel level
-- **cgroups** limit resources
+- **systemd-run** enforces resource limits via cgroups
 
-This gives container-grade isolation with no additional dependencies.
+This gives container-grade isolation with no additional dependencies and no root required after initial setup.
 
 ### Why both OpenAI and llama.cpp?
 
@@ -461,7 +476,8 @@ Different users have different needs. OpenAI gives higher-quality reasoning for 
 
 - **Linux** (namespaces, seccomp, and cgroups are Linux-only)
 - **Python 3.10+**
-- **Root access** (for sandbox setup, mounts, cgroups, device nodes)
+- **systemd** (for `systemd-run --user` resource limits)
+- **Root access for initial setup only** (`sudo hermit-setup` — one-time)
 - **OpenAI API key** *or* a local GGUF model for llama.cpp
 
 ## License
