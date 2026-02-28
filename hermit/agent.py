@@ -6,13 +6,11 @@ import subprocess
 import sys
 import signal
 import json
-from pathlib import Path
 from hermit.policy import check_command, RiskLevel
 from hermit.actions import parse_action
-from hermit.mounts import setup_mounts, cleanup_mounts, list_mounts
+from hermit.mounts import list_mounts
 from hermit.llm_backend import create_backend, LLMBackend
 from hermit.config import load_config, ensure_setup, get_cgroup_config
-from hermit.cgroups import setup_cgroup, cleanup_cgroup
 from hermit.planner import system_prompt, parse_plan
 from hermit.executor import execute_plan
 from hermit import audit
@@ -91,22 +89,77 @@ def execute_unsafe(command: str) -> str:
 
 def execute_sandboxed(command: str) -> str:
     # Get timeout from config
+    from hermit.config import get_allowed_directories
+    import shlex
+
     cgroup_cfg = get_cgroup_config()
     timeout = cgroup_cfg.get('timeout_seconds', 30)
 
-    cgroup_path = "/sys/fs/cgroup/hermit-sandbox"
-    wrapper_command = f'''
-        echo $$ > {cgroup_path}/cgroup.procs
-        exec unshare --mount --pid --fork --mount-proc \
-            chroot {SANDBOX_ROOT} \
-            /usr/bin/python3 /sandbox/sandbox_wrapper.py '{command.replace("'", "'\"'\"'")}'
-    '''
+    # building bind mount commands for user directories
+    user_mounts = []
+    for d in get_allowed_directories():
+        host = os.path.expanduser(d["host"])
+        sandbox_relative = d["sandbox"].lstrip("/")
+        sandbox_absolute = f"{SANDBOX_ROOT}/{sandbox_relative}"
+        if os.path.exists(host):
+            user_mounts.append(f"mount --bind {shlex.quote(host)} {shlex.quote(sandbox_absolute)}")
+
+    user_mount_script = "\n        ".join(user_mounts)
+
+    # Device nodes: bind-mount from host instead of mknod
+    dev_mounts = "\n        ".join([
+        f"mount --bind /dev/{d} {SANDBOX_ROOT}/dev/{d}"
+        for d in ["null", "zero", "random", "urandom"]
+        if os.path.exists(f"/dev/{d}")
+    ])
+    
+    safe_command = command.replace("'", "'\"'\"'")
+
+    inner_script = f"""
+        {dev_mounts}
+        
+        mount -t proc proc {SANDBOX_ROOT}/proc
+        
+        # User directories
+        {user_mount_script}
+        
+        # Enter sandbox
+        exec chroot {SANDBOX_ROOT} \\
+            /usr/bin/python3 /sandbox/sandbox_wrapper.py '{safe_command}'
+    """
+
+    cg = get_cgroup_config()
+    systemd_prefix = [
+        "systemd-run", "--user", "--scope",
+        f"-p", f"MemoryMax={cg.get('memory_max_mb', 512)}M",
+        f"-p", f"CPUQuota={cg.get('cpu_quota_percent', 50)}%",
+        f"-p", f"TasksMax={cg.get('pids_max', 100)}",
+        "--"
+    ]
+
+    wrapper_command = systemd_prefix + [
+        "unshare",
+        "--user", "--map-root-user",
+        "--mount",
+        "--pid", "--fork",
+        "bash", "-c", inner_script
+    ]
+
+    # Minimal env — don't leak API keys, tokens, etc. into sandbox
+    clean_env = {
+        "PATH": "/usr/sbin:/usr/bin:/sbin:/bin",
+        "HOME": "/root",
+        "LANG": "C",
+        "DBUS_SESSION_BUS_ADDRESS": os.environ.get("DBUS_SESSION_BUS_ADDRESS", ""),
+        "XDG_RUNTIME_DIR": os.environ.get("XDG_RUNTIME_DIR", ""),
+    }
 
     process = subprocess.Popen(
-        ["bash", "-c", wrapper_command],
+        wrapper_command,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True
+        text=True,
+        env=clean_env,
     )
 
     # Wait for completion with timeout
@@ -118,15 +171,11 @@ def execute_sandboxed(command: str) -> str:
         process.communicate()  # Clean up
         return f"Command timed out after {timeout} seconds"
 
-
 def cleanup_handler(signum, frame):
     """Handle Ctrl+C gracefully."""
     global cleanup_done
     if not cleanup_done:
         print("\n")
-        ui.info("Cleaning up...")
-        cleanup_mounts(mounted_paths)
-        cleanup_cgroup()
         cleanup_done = True
     print("  Goodbye!")
     sys.exit(0)
@@ -216,13 +265,6 @@ def main():
     print(f"  {ui.green(ui.DOT)} LLM: {llm_backend.get_name()}")
 
     if sandboxed:
-        mounted_paths = setup_mounts()
-        cgroup_cfg = get_cgroup_config()
-        setup_cgroup(
-            memory_max_mb=cgroup_cfg.get('memory_max_mb', 512),
-            cpu_quota_percent=cgroup_cfg.get('cpu_quota_percent', 50),
-            pids_max=cgroup_cfg.get('pids_max', 100)
-        )
         print()
         signal.signal(signal.SIGINT, cleanup_handler)
     else:
@@ -344,11 +386,7 @@ def main():
                 execute_plan(plan, exec_fn, get_user_approval, step_by_step)
 
     finally:
-        if sandboxed and mounted_paths and not cleanup_done:
-            print()
-            ui.info("Cleaning up...")
-            cleanup_mounts(mounted_paths)
-            cleanup_cgroup()
+        if sandboxed and not cleanup_done:
             cleanup_done = True
 
 
