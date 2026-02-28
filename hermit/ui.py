@@ -83,8 +83,10 @@ def mount_status(host: str, sandbox: str, ok: bool):
 
 def command_box(command: str):
     """Print command in a minimal box."""
+    lines = command.strip().split("\n")
     print(f"\n  {dim('┌ Command ─────────────────────────────────')}")
-    print(f"  {dim('│')} {command}")
+    for line in lines:
+        print(f"  {dim('│')} {line}")
     print(f"  {dim('└──────────────────────────────────────────')}\n")
 
 

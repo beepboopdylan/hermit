@@ -1,4 +1,6 @@
 from abc import ABC, abstractmethod
+import threading
+
 
 class LLMBackend(ABC):
     """Base class that both backends implement."""
@@ -74,13 +76,38 @@ class OpenAIBackend(LLMBackend):
 
 class LlamaCPPBackend(LLMBackend):
     
-    def __init__(self, model_path: str, n_ctx: int = 4096, n_gpu_layers: int = -1):
+    def __init__(self, model_path: str, n_ctx: int = 4096, n_gpu_layers: int = -1,
+                 n_batch: int = 2048, n_ubatch: int = 512):
         self.model_path = model_path
         self.n_ctx = n_ctx
         self.n_gpu_layers = n_gpu_layers
+        self.n_batch = n_batch
+        self.n_ubatch = n_ubatch
+        self._load_thread = None
+        self._load_error = None
         self._llm = None
         self.conversation_history = []
         self.max_history_turns = 10
+
+    def preload(self):
+        """Start loading model in background. Call during startup."""
+        def _load():
+            try:
+                self._get_llm()
+            except Exception as e:
+                self._load_error = e
+        
+        self._load_thread = threading.Thread(target=_load, daemon=True)
+        self._load_thread.start()
+
+    def get_completion(self, system_prompt, user_input):
+        # Block here if model isn't ready yet
+        if self._load_thread and self._load_thread.is_alive():
+            ui.info("Model still loading, please wait...")
+            self._load_thread.join()
+        
+        if self._load_error:
+            raise RuntimeError(f"Model failed to load: {self._load_error}")
 
     def _get_llm(self):
         """Lazy-load the model. First call takes a few seconds."""
@@ -90,6 +117,8 @@ class LlamaCPPBackend(LLMBackend):
                 model_path=self.model_path,
                 n_ctx=self.n_ctx,
                 n_gpu_layers=self.n_gpu_layers,
+                n_batch=self.n_batch,
+                n_ubatch=self.n_ubatch,
                 verbose=False  # Suppress llama.cpp logs
             )
         return self._llm
@@ -149,7 +178,9 @@ def create_backend(config: dict) -> LLMBackend:
         return LlamaCPPBackend(
             model_path=config.get("llamacpp_model_path", ""),
             n_ctx=config.get("llamacpp_n_ctx", 4096),
-            n_gpu_layers=config.get("llamacpp_n_gpu_layers", -1)
+            n_gpu_layers=config.get("llamacpp_n_gpu_layers", -1),
+            n_batch=config.get("llamacpp_n_batch", 2048),
+            n_ubatch=config.get("llamacpp_n_ubatch", 512),
         )
     else:
         raise ValueError(f"Unknown backend: {backend_type}")

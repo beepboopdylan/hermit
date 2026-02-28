@@ -48,6 +48,8 @@ def system_prompt() -> str:
             6. For simple requests (ls, cat, etc.), return a single step.
             7. When creating code files, include useful starter content (imports, boilerplate, etc.)
             8. In file content, use \\n for newlines. Never use literal newlines inside JSON strings.
+            9. CRITICAL: "show", "list", "what's in", "display" = READ-ONLY. Use list_files or find_files. NEVER move, delete, or reorganize files unless the user explicitly says "organize", "move", "sort into folders", or "clean up".
+            10. organize_by_type MOVES files into folders. Only use it when the user explicitly asks to organize or rearrange files.
 
             FORMAT:
             {{
@@ -73,6 +75,12 @@ def system_prompt() -> str:
             - organize_by_type: {{"action": "organize_by_type", "path": "..."}}
             - run_command: {{"action": "run_command", "command": "..."}}
 
+            SANDBOX ENVIRONMENT:
+            Commands run in a minimal chroot. Only these tools are available:
+            sh, ls, cat, cp, mv, rm, mkdir, find, touch, echo, python3.
+            Do NOT use: awk, sed, grep, sort, curl, wget, or other tools.
+            For anything complex, use python3 -c "...".
+
             WORKSPACE PATHS:
             {workspace_lines}
 
@@ -80,6 +88,9 @@ def system_prompt() -> str:
 
             User: "show my downloads"
             {{"description": "List downloads", "steps": [{{"step_id": 1, "action": {{"action": "list_files", "path": "/workspace/downloads", "all": true, "long": true}}, "depends_on": [], "description": "List files in downloads"}}]}}
+
+            User: "show me what's in downloads sorted by type"
+            {{"description": "List downloads grouped by file type", "steps": [{{"step_id": 1, "action": {{"action": "run_command", "command": "python3 -c \"import os, collections; p='/workspace/downloads'; files=collections.defaultdict(list); [files[os.path.splitext(f)[1] or 'other'].append(f) for f in os.listdir(p) if os.path.isfile(os.path.join(p,f))]; [print(f'\\n{{ext.upper()}}:') or [print(f'  {{f}}') for f in sorted(fs)] for ext,fs in sorted(files.items())]\""}}, "depends_on": [], "description": "List files grouped by extension"}}]}}
 
             User: "set up a python project called myapp with src and tests"
             {{"description": "Create myapp project structure", "steps": [{{"step_id": 1, "action": {{"action": "create_directory", "path": "/workspace/projects/myapp/src"}}, "depends_on": [], "description": "Create src directory"}}, {{"step_id": 2, "action": {{"action": "create_directory", "path": "/workspace/projects/myapp/tests"}}, "depends_on": [], "description": "Create tests directory"}}, {{"step_id": 3, "action": {{"action": "create_file", "path": "/workspace/projects/myapp/src/__init__.py", "content": ""}}, "depends_on": [1], "description": "Add __init__.py to src"}}, {{"step_id": 4, "action": {{"action": "create_file", "path": "/workspace/projects/myapp/tests/__init__.py", "content": ""}}, "depends_on": [2], "description": "Add __init__.py to tests"}}, {{"step_id": 5, "action": {{"action": "create_file", "path": "/workspace/projects/myapp/requirements.txt", "content": ""}}, "depends_on": [], "description": "Create requirements.txt"}}]}}

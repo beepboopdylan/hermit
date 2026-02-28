@@ -136,20 +136,17 @@ hermit> help
 
   Commands:
     help                     Show this help
+    settings                 Open settings
     tree                     Show workspace structure
-    config show              Show configuration
-    config set <key> <val>   Set a preference
-    config add-directory     Add a folder to sandbox
-    config backend <name>    Switch LLM backend
+    mounts                   Show mounted folders
     audit                    Show command history
     clear                    Clear conversation history
     exit                     Quit hermit
 
-  Or just describe what you want:
+  Or just ask me to do something:
     "show my downloads"
     "organize files by type"
-    "find all .py files in projects"
-    "create a notes folder and move all .txt files into it"
+    "find all .py files"
 ```
 
 ### Examples
@@ -180,23 +177,15 @@ hermit> find all PDFs in my projects and copy them to downloads
 
 ## LLM Backends
 
-Hermit supports two backends, switchable at any time:
+Hermit supports two backends, switchable at any time via the `settings` command:
 
 ### OpenAI (online)
 
 Uses the OpenAI API. Default model is `gpt-4o-mini`. Requires an API key.
 
-```
-hermit> config backend openai
-```
-
 ### llama.cpp (offline)
 
 Runs a local GGUF model via `llama-cpp-python`. No network required, no API keys, no data leaving your machine. Supports GPU acceleration via Vulkan.
-
-```
-hermit> config backend llamacpp
-```
 
 **Why llama.cpp over Ollama?**
 
@@ -361,7 +350,13 @@ View recent entries with `audit` inside Hermit.
 
 ## Configuration
 
-Config is stored at `~/.hermit/config.json`.
+Config is stored at `~/.hermit/config.json`. The easiest way to manage settings is the built-in settings TUI:
+
+```
+hermit> settings
+```
+
+This opens a full-screen settings page where you can navigate with arrow keys and configure everything: LLM backend, safety rules, mounted folders, resource limits, and preferences.
 
 ### Preferences
 
@@ -389,21 +384,10 @@ Config is stored at `~/.hermit/config.json`.
 
 ### Managing Directories
 
-```bash
-# Add a folder to the sandbox
-hermit> config add-directory ~/Music
+Folders can be added and removed from the **Folders** screen in `settings`. You can also view currently mounted folders at any time:
 
-# Remove a folder
-hermit> config remove-directory ~/Music
-
-# View current config
-hermit> config show
-
-# Switch backend
-hermit> config backend llamacpp
-
-# Reset to defaults (keeps API keys)
-hermit> config reset
+```
+hermit> mounts
 ```
 
 ## Structured Actions
@@ -437,12 +421,12 @@ hermit/
 ├── llm_backend.py       # Abstract backend + OpenAI and llama.cpp implementations
 ├── policy.py            # Risk assessment and pattern matching
 ├── config.py            # Configuration management and setup wizard
+├── settings_ui.py       # Interactive settings TUI (prompt_toolkit)
 ├── mounts.py            # Bind-mount user directories into sandbox
 ├── setup_sandbox.py     # Chroot environment initialization
 ├── sandbox_wrapper.py   # Runs inside chroot, applies seccomp filter
 ├── seccomp_filter.py    # Kernel-level syscall whitelist
 ├── cgroups.py           # Resource limit enforcement
-├── model_manager.py     # Local model download and management
 ├── audit.py             # JSON event logging
 └── ui.py                # Terminal UI (colors, spinners, prompts)
 ```
