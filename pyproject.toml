@@ -32,6 +32,9 @@ dependencies = [
     "prompt-toolkit>=3.0.0",
 ]
 
+[project.optional-dependencies]
+dev = ["pytest>=7.0.0"]
+
 [project.scripts]
 hermit = "hermit.agent:main"
 hermit-setup = "hermit.setup_sandbox:main"
