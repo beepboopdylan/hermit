@@ -17,8 +17,6 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install dependencies
-        run: |
-          pip install pytest
-          pip install openai python-dotenv prompt-toolkit
+        run: pip install -e ".[dev]"
       - name: Run tests
         run: pytest tests/ -v
