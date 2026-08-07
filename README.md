@@ -1,5 +1,7 @@
 # Hermit
 
+> **Status:** Feature-complete as a solo exploration of prompt-injection-resistant agent design. Development is paused — the architecture (CaMeL planning, structured actions, chroot/namespace/seccomp sandboxing) is implemented and tested, and this snapshot is tagged as [`v0.1.0`](https://github.com/beepboopdylan/hermit/releases/tag/v0.1.0). Issues and PRs may not be actively triaged, but the code is a complete, working reference implementation.
+
 Want to organize your files, automate tasks, or explore your computer - all in natural language?
 
 Hermit is an agentic terminal assistant. Describe what you want in natural language, and Hermit translates it to safe, structured actions running in an isolated Linux environment.
